@@ -16,6 +16,7 @@ $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME): $(SOURCES) Info.plist
 	@echo "→ Built binary"
 
 $(ICNS): gen_icon.swift
+	@rm -rf $(ICONSET)
 	swift gen_icon.swift
 	iconutil -c icns $(ICONSET) -o $(ICNS)
 	@echo "→ Built icon"
