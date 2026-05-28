@@ -135,6 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         copyItem.target = self
         menu.addItem(copyItem)
 
+        // --- Refresh metadata ---
+        let refreshItem = NSMenuItem(title: "Refresh Metadata", action: #selector(refreshMetadata), keyEquivalent: "r")
+        refreshItem.keyEquivalentModifierMask = [.command, .shift]
+        refreshItem.target = self
+        menu.addItem(refreshItem)
+
         menu.addItem(.separator())
 
         // --- Quit ---
@@ -344,6 +350,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(info, forType: .string)
+    }
+
+    @objc private func refreshMetadata() {
+        guard let station = player.currentStation, let url = station.url else { return }
+        nowPlayingItem?.title = "Refreshing metadata..."
+        metadataParser.disconnect()
+        metadataParser.connect(to: url)
     }
 
     @objc private func quitApp() {

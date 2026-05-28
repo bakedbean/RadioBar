@@ -6,6 +6,8 @@ import Foundation
 /// Runs a parallel URLSession data task that reads raw stream bytes,
 /// skips audio according to the `icy-metaint` interval, and parses
 /// `StreamTitle='...'` chunks out of the metadata blocks.
+///
+/// Auto-retries up to 3 times on connection failure with a 5-second backoff.
 final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendable {
 
     // MARK: - Published state
@@ -24,21 +26,18 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
     private var metaBuffer = Data()
     private var streamActive = false
 
+    // Auto-retry
+    private var lastURL: URL?
+    private var retryCount = 0
+    private let maxRetries = 3
+
     // MARK: - Public API
 
     func connect(to url: URL) {
         disconnect()
-
-        var request = URLRequest(url: url)
-        request.setValue("1", forHTTPHeaderField: "Icy-MetaData")
-        request.timeoutInterval = 30
-
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForResource = 3600   // 1-hour stream timeout
-        config.timeoutIntervalForRequest = 30
-        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        task = session?.dataTask(with: request)
-        task?.resume()
+        lastURL = url
+        retryCount = 0
+        startConnection(to: url)
     }
 
     func disconnect() {
@@ -51,6 +50,31 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
         audioBytesRemaining = 0
         metaLengthRemaining = 0
         metaBuffer = Data()
+        retryCount = 0
+    }
+
+    // MARK: - Private
+
+    private func startConnection(to url: URL) {
+        var request = URLRequest(url: url)
+        request.setValue("1", forHTTPHeaderField: "Icy-MetaData")
+        request.timeoutInterval = 30
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForResource = 3600   // 1-hour stream timeout
+        config.timeoutIntervalForRequest = 30
+        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        task = session?.dataTask(with: request)
+        task?.resume()
+    }
+
+    private func scheduleRetry() {
+        guard let url = lastURL, retryCount < maxRetries else { return }
+        retryCount += 1
+        let delay = DispatchTime.now() + .seconds(5)
+        DispatchQueue.global().asyncAfter(deadline: delay) { [weak self] in
+            self?.startConnection(to: url)
+        }
     }
 
     // MARK: - URLSessionDataDelegate
@@ -60,8 +84,6 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         if let httpResponse = response as? HTTPURLResponse {
-            // Use value(forHTTPHeaderField:) — works on the actual HTTP response,
-            // case-insensitive, no type-casting pitfalls.
             if let metaintStr = httpResponse.value(forHTTPHeaderField: "icy-metaint"),
                let val = Int(metaintStr), val > 0 {
                 metaint = val
@@ -75,6 +97,7 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
             }
         }
         streamActive = true
+        retryCount = 0   // success — reset retry counter
         completionHandler(.allow)
     }
 
@@ -88,26 +111,22 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
 
         while offset < count {
             if audioBytesRemaining > 0 {
-                // Skip audio bytes
                 let consume = min(audioBytesRemaining, count - offset)
                 offset += consume
                 audioBytesRemaining -= consume
 
             } else if metaLengthRemaining == 0 {
-                // Read metadata length byte (1 byte = N * 16 bytes of metadata)
                 let metaLenByte = data[offset]
                 offset += 1
                 metaLengthRemaining = Int(metaLenByte) * 16
 
                 if metaLengthRemaining == 0 {
-                    // No metadata this interval → next audio chunk
                     audioBytesRemaining = metaint
                 } else {
                     metaBuffer = Data()
                 }
 
             } else {
-                // Accumulate metadata bytes
                 let consume = min(metaLengthRemaining, count - offset)
                 metaBuffer.append(data.subdata(in: offset ..< (offset + consume)))
                 offset += consume
@@ -125,22 +144,24 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         streamActive = false
-        if let error {
-            let nsErr = error as NSError
-            // -999 = cancelled (we did it), not a real error
-            if nsErr.code != -999 {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onError?(error.localizedDescription)
-                }
-            }
+        guard let error else { return }
+
+        let nsErr = error as NSError
+        // -999 = cancelled by us, not a real error
+        if nsErr.code == NSURLErrorCancelled { return }
+
+        let message = error.localizedDescription
+        DispatchQueue.main.async { [weak self] in
+            self?.onError?(message)
         }
+
+        // Auto-retry on transient failures (timeout, network down, etc.)
+        scheduleRetry()
     }
 
     // MARK: - Metadata parsing
 
     private func processMetadata(_ data: Data) {
-        // ICY spec says ISO-8859-1, but many stations send UTF-8.
-        // Try UTF-8 first; fall back to Latin-1.
         let metaString: String
         if let s = String(data: data, encoding: .utf8) {
             metaString = s
@@ -161,18 +182,12 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
     }
 
     /// Extracts the value of `StreamTitle='...'` from an ICY metadata string.
-    ///
-    /// Format: `StreamTitle='Artist - Song';StreamUrl='https://...';`
-    /// Returns `nil` if the title is empty or missing.
     private func extractStreamTitle(from raw: String) -> String? {
         guard let startRange = raw.range(of: "StreamTitle='") else { return nil }
         let searchStart = startRange.upperBound
         let remainder = raw[searchStart...]
 
-        // Find closing quote — the value may contain escaped quotes,
-        // but in practice the closing pattern is "';" (quote-semicolon)
         guard let endRange = remainder.range(of: "';") else {
-            // Might be at end of string with just a trailing quote
             if let endQuote = remainder.range(of: "'", options: .backwards) {
                 let val = String(remainder[..<endQuote.lowerBound])
                 return val.isEmpty ? nil : val
