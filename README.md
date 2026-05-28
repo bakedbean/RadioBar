@@ -2,8 +2,6 @@
 
 A minimal macOS menubar app for streaming internet radio, with live track info displayed directly in the menubar — no dropdown required.
 
-![RadioBar screenshot](screenshot.png)
-
 ## Why?
 
 Most menubar radio apps (Triode, etc.) hide track info behind a dropdown. RadioBar parses ICY (Shoutcast/Icecast) metadata from the raw stream bytes and shows the current song right in your menubar.
