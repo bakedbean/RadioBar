@@ -60,16 +60,15 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         if let httpResponse = response as? HTTPURLResponse {
-            let headers = httpResponse.allHeaderFields as? [String: String] ?? [:]
-
-            if let metaintStr = headers["icy-metaint"] ?? headers["Icy-Metaint"],
+            // Use value(forHTTPHeaderField:) — works on the actual HTTP response,
+            // case-insensitive, no type-casting pitfalls.
+            if let metaintStr = httpResponse.value(forHTTPHeaderField: "icy-metaint"),
                let val = Int(metaintStr), val > 0 {
                 metaint = val
                 audioBytesRemaining = val
             }
 
-            let name = headers["icy-name"] ?? headers["Icy-Name"]
-            if let name {
+            if let name = httpResponse.value(forHTTPHeaderField: "icy-name") {
                 DispatchQueue.main.async { [weak self] in
                     self?.onStationName?(name)
                 }
