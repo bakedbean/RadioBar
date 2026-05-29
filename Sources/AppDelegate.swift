@@ -87,16 +87,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // --- Album artwork (larger, in dropdown) ---
+        // --- Album artwork (centered in dropdown) ---
         let artworkItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         artworkItem.isEnabled = false
-        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
-        let imageView = NSImageView(frame: NSRect(x: 4, y: 4, width: 192, height: 192))
+        let imageSize: CGFloat = 192
+        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: imageSize + 8))
+
+        let imageView = NSImageView(frame: NSRect(
+            x: (260 - imageSize) / 2,
+            y: 4,
+            width: imageSize,
+            height: imageSize
+        ))
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.wantsLayer = true
         imageView.layer?.cornerRadius = 6
         imageView.layer?.masksToBounds = true
+        // Keep image horizontally centered if menu resizes the container
+        imageView.autoresizingMask = [.minXMargin, .maxXMargin]
         artworkContainer.addSubview(imageView)
+
         artworkItem.view = artworkContainer
         menu.addItem(artworkItem)
         artworkImageView = imageView
