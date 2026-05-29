@@ -91,10 +91,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let artworkItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         artworkItem.isEnabled = false
         let imageSize: CGFloat = 192
-        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: imageSize + 8))
+        let containerWidth: CGFloat = 260
+        let menuLeftMargin: CGFloat = 22  // NSMenu state column width
+        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: imageSize + 8))
 
+        // Center in container, then shift left by the menu's margin so the
+        // image appears centered relative to the full menu width.
+        let x = ((containerWidth - imageSize) / 2) - menuLeftMargin
         let imageView = NSImageView(frame: NSRect(
-            x: (260 - imageSize) / 2,
+            x: x,
             y: 4,
             width: imageSize,
             height: imageSize
