@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private weak var nowPlayingItem: NSMenuItem?
     private weak var stationLabelItem: NSMenuItem?
+    private weak var artworkItem: NSMenuItem?
+    private var artworkContainer: NSView?
     private weak var artworkImageView: NSImageView?
     private weak var playPauseItem: NSMenuItem?
     private weak var volumeSlider: NSSlider?
@@ -87,13 +89,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // --- Album artwork (centered in dropdown) ---
-        let artworkItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        artworkItem.isEnabled = false
+        // --- Album artwork (collapsed when empty, centered in dropdown) ---
+        let artworkMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        artworkMenuItem.isEnabled = false
         let imageSize: CGFloat = 192
-        // Container fills the menu width; image centers within it via autoresizing.
-        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: imageSize + 12))
-        artworkContainer.autoresizingMask = [.width]
+        let expandedHeight: CGFloat = imageSize + 12
+        // Start collapsed — height 1 so the menu item takes almost no space
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 1))
+        container.autoresizingMask = [.width]
 
         let imageView = NSImageView(frame: NSRect(
             x: (300 - imageSize) / 2,
@@ -106,10 +109,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         imageView.layer?.cornerRadius = 6
         imageView.layer?.masksToBounds = true
         imageView.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
-        artworkContainer.addSubview(imageView)
+        container.addSubview(imageView)
 
-        artworkItem.view = artworkContainer
-        menu.addItem(artworkItem)
+        artworkMenuItem.view = container
+        menu.addItem(artworkMenuItem)
+
+        artworkItem = artworkMenuItem
+        artworkContainer = container
         artworkImageView = imageView
 
         // --- Now Playing info (disabled, display only) ---
@@ -236,9 +242,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func fetchArtwork(for track: String) {
+        // Collapse before fetching — will expand if artwork found
+        artworkContainer?.frame.size.height = 1
+
         artworkFetcher.fetch(artistSong: track) { [weak self] image in
             guard let self, let image else { return }
-            // Larger version in dropdown
+            // Expand to show artwork
+            self.artworkContainer?.frame.size.height = 204  // imageSize + 12
             self.artworkImageView?.image = image
 
             // Small thumbnail in menubar (replace radio icon)
@@ -338,7 +348,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setMenubarTitle(station.name)
         stationLabelItem?.title = station.name
         nowPlayingItem?.title = "Loading..."
+        resetArtwork()
         refreshPlayPauseUI()
+    }
+
+    private func resetArtwork() {
+        artworkContainer?.frame.size.height = 1
+        artworkImageView?.image = nil
+        // Restore radio antenna icon
+        if let icon = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right",
+                              accessibilityDescription: "RadioBar") {
+            icon.isTemplate = true
+            statusItem.button?.image = icon
+        }
     }
 
     @objc private func togglePlayPause() {
@@ -360,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setMenubarTitle(station.name)
         stationLabelItem?.title = station.name
         nowPlayingItem?.title = "Loading..."
+        resetArtwork()
         refreshPlayPauseUI()
     }
 
