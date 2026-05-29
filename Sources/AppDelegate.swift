@@ -92,12 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         artworkItem.isEnabled = false
         let imageSize: CGFloat = 192
         let containerWidth: CGFloat = 260
-        let menuLeftMargin: CGFloat = 22  // NSMenu state column width
         let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: imageSize + 8))
 
-        // Center in container, then shift left by the menu's margin so the
-        // image appears centered relative to the full menu width.
-        let x = ((containerWidth - imageSize) / 2) - menuLeftMargin
+        // Center in container, nudged right to visually balance against the
+        // menu's left-side state column.
+        let x = ((containerWidth - imageSize) / 2) + 10
         let imageView = NSImageView(frame: NSRect(
             x: x,
             y: 4,
