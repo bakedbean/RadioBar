@@ -3,7 +3,10 @@ import AppKit
 import Combine
 
 /// Wraps AVPlayer for internet radio streaming.
-/// Manages play/pause/stop and exposes volume control.
+///
+/// For live radio, "pausing" disconnects from the stream entirely (rather than
+/// freezing a buffer position), and "resuming" reconnects fresh — so you always
+/// hear the live broadcast, not buffered audio from when you paused.
 final class RadioPlayer: NSObject, ObservableObject {
 
     @Published private(set) var isPlaying = false
@@ -22,12 +25,12 @@ final class RadioPlayer: NSObject, ObservableObject {
     }
 
     var onPlaybackStateChange: ((Bool) -> Void)?
-    var onNowPlaying: ((String?) -> Void)?
+    var onStop: (() -> Void)?      // called when user pauses (disconnects)
+    var onResume: (() -> Void)?    // called when user resumes (reconnects)
 
     override init() {
         super.init()
 
-        // Observe AVPlayer status
         player.publisher(for: \.timeControlStatus)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
@@ -47,12 +50,20 @@ final class RadioPlayer: NSObject, ObservableObject {
         player.play()
     }
 
+    /// Disconnect from the live stream entirely (don't freeze the buffer).
     func pause() {
         player.pause()
+        player.replaceCurrentItem(with: nil)
+        onStop?()
     }
 
+    /// Reconnect fresh to the live stream.
     func resume() {
+        guard let station = currentStation, let url = station.url else { return }
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
         player.play()
+        onResume?()
     }
 
     func togglePlayPause() {
@@ -67,5 +78,6 @@ final class RadioPlayer: NSObject, ObservableObject {
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentStation = nil
+        onStop?()
     }
 }

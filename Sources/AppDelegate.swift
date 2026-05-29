@@ -244,6 +244,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.nowPlayingItem?.title = "Metadata error: \(msg)"
             }
         }
+
+        // Pause → disconnect metadata; resume → reconnect
+        player.onStop = { [weak self] in
+            self?.metadataParser.disconnect()
+        }
+        player.onResume = { [weak self] in
+            if let station = self?.player.currentStation, let url = station.url {
+                self?.metadataParser.connect(to: url)
+            }
+        }
     }
 
     // MARK: - Actions
