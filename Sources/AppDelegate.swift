@@ -91,15 +91,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let artworkItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         artworkItem.isEnabled = false
         let imageSize: CGFloat = 192
-        let containerWidth: CGFloat = 260
-        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: imageSize + 8))
+        // Container fills the menu width; image centers within it via autoresizing.
+        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: imageSize + 12))
+        artworkContainer.autoresizingMask = [.width]
 
-        // Center in container, nudged right to visually balance against the
-        // menu's left-side state column.
-        let x = ((containerWidth - imageSize) / 2) + 10
         let imageView = NSImageView(frame: NSRect(
-            x: x,
-            y: 4,
+            x: (300 - imageSize) / 2,
+            y: 6,
             width: imageSize,
             height: imageSize
         ))
@@ -107,8 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         imageView.wantsLayer = true
         imageView.layer?.cornerRadius = 6
         imageView.layer?.masksToBounds = true
-        // Keep image horizontally centered if menu resizes the container
-        imageView.autoresizingMask = [.minXMargin, .maxXMargin]
+        imageView.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
         artworkContainer.addSubview(imageView)
 
         artworkItem.view = artworkContainer
