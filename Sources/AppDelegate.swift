@@ -93,7 +93,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let artworkMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         artworkMenuItem.isEnabled = false
         let imageSize: CGFloat = 192
-        let expandedHeight: CGFloat = imageSize + 12
         // Start collapsed — height 1 so the menu item takes almost no space
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 1))
         container.autoresizingMask = [.width]
