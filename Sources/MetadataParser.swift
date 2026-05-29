@@ -175,7 +175,10 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
             .replacingOccurrences(of: "\0", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let title = extractStreamTitle(from: cleaned)
+        guard let title = extractStreamTitle(from: cleaned), !title.isEmpty else {
+            return  // empty chunk — don't overwrite the current display
+        }
+
         DispatchQueue.main.async { [weak self] in
             self?.onTrackUpdate?(title)
         }
