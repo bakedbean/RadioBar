@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let player = RadioPlayer()
     private let metadataParser = MetadataParser()
+    private let artworkFetcher = ArtworkFetcher()
     private var stations: [Station] = StationStore.load()
     private var cancellables = Set<AnyCancellable>()
 
@@ -18,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private weak var nowPlayingItem: NSMenuItem?
     private weak var stationLabelItem: NSMenuItem?
+    private weak var artworkImageView: NSImageView?
     private weak var playPauseItem: NSMenuItem?
     private weak var volumeSlider: NSSlider?
 
@@ -84,6 +86,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func buildMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
+
+        // --- Album artwork (larger, in dropdown) ---
+        let artworkItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        artworkItem.isEnabled = false
+        let artworkContainer = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        let imageView = NSImageView(frame: NSRect(x: 4, y: 4, width: 192, height: 192))
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.wantsLayer = true
+        imageView.layer?.cornerRadius = 6
+        imageView.layer?.masksToBounds = true
+        artworkContainer.addSubview(imageView)
+        artworkItem.view = artworkContainer
+        menu.addItem(artworkItem)
+        artworkImageView = imageView
 
         // --- Now Playing info (disabled, display only) ---
         let nowPlaying = NSMenuItem(title: "Not Playing", action: nil, keyEquivalent: "")
@@ -208,6 +224,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func fetchArtwork(for track: String) {
+        artworkFetcher.fetch(artistSong: track) { [weak self] image in
+            guard let self, let image else { return }
+            // Larger version in dropdown
+            self.artworkImageView?.image = image
+
+            // Small thumbnail in menubar (replace radio icon)
+            let thumb = self.thumbnail(from: image, size: 18)
+            self.statusItem.button?.image = thumb
+        }
+    }
+
+    /// Create a square thumbnail of the given size from an image.
+    private func thumbnail(from image: NSImage, size: CGFloat) -> NSImage {
+        let thumb = NSImage(size: NSSize(width: size, height: size))
+        thumb.lockFocus()
+        let rect = NSRect(x: 0, y: 0, width: size, height: size)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        path.addClip()
+        image.draw(in: rect, from: .zero, operation: .copy, fraction: 1.0)
+        thumb.unlockFocus()
+        thumb.isTemplate = false
+        return thumb
+    }
+
     // MARK: - Callbacks
 
     private func setupCallbacks() {
@@ -218,10 +259,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
-        // Metadata → update menubar title + now-playing label
+        // Metadata → update menubar title + now-playing label + artwork
         metadataParser.onTrackUpdate = { [weak self] track in
             DispatchQueue.main.async {
                 self?.refreshNowPlayingUI(track: track)
+                if let track, !track.isEmpty {
+                    self?.fetchArtwork(for: track)
+                }
             }
         }
 

@@ -3,7 +3,7 @@
 APP_NAME = RadioBar
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-SOURCES = Sources/main.swift Sources/Station.swift Sources/MetadataParser.swift Sources/RadioPlayer.swift Sources/AppDelegate.swift
+SOURCES = Sources/main.swift Sources/Station.swift Sources/MetadataParser.swift Sources/RadioPlayer.swift Sources/AppDelegate.swift Sources/ArtworkFetcher.swift
 ICONSET = $(BUILD_DIR)/AppIcon.iconset
 ICNS = $(BUILD_DIR)/AppIcon.icns
 
