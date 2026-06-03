@@ -3,7 +3,7 @@
 APP_NAME = RadioBar
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-SOURCES = Sources/main.swift Sources/Station.swift Sources/MetadataParser.swift Sources/RadioPlayer.swift Sources/AppDelegate.swift Sources/ArtworkFetcher.swift
+SOURCES = Sources/main.swift Sources/Station.swift Sources/MetadataParser.swift Sources/RadioPlayer.swift Sources/AppDelegate.swift Sources/ArtworkFetcher.swift Sources/GlobalHotkey.swift
 ICONSET = $(BUILD_DIR)/AppIcon.iconset
 ICNS = $(BUILD_DIR)/AppIcon.icns
 
@@ -12,7 +12,7 @@ build: $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME) $(APP_BUNDLE)/Contents/Resources
 $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME): $(SOURCES) Info.plist
 	@mkdir -p $(APP_BUNDLE)/Contents/{MacOS,Resources}
 	@cp Info.plist $(APP_BUNDLE)/Contents/Info.plist
-	swiftc -o $@ -framework AppKit -framework AVFoundation $(SOURCES)
+	swiftc -o $@ -framework AppKit -framework AVFoundation -framework Carbon $(SOURCES)
 	@echo "→ Built binary"
 
 $(ICNS): gen_icon.swift
