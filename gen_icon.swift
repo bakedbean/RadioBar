@@ -5,7 +5,10 @@ import Foundation
 // save as PNGs, then build an .icns file with iconutil.
 
 let symbolName = "antenna.radiowaves.left.and.right"
-let outputDir = URL(fileURLWithPath: "/Users/eben/RadioBar/build/AppIcon.iconset")
+// Output iconset directory: first CLI argument, or a repo-relative default so the
+// build works regardless of where the repo is checked out (e.g. git worktrees).
+let outputPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "build/AppIcon.iconset"
+let outputDir = URL(fileURLWithPath: outputPath)
 try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
 let sizes: [(name: String, size: CGFloat)] = [
@@ -55,5 +58,6 @@ for (name, size) in sizes {
     print("  \(name).png (\(Int(size))x\(Int(size)))")
 }
 
+let icnsPath = outputDir.deletingLastPathComponent().appendingPathComponent("AppIcon.icns").path
 print("\nSaved to \(outputDir.path)")
-print("Run: iconutil -c icns \(outputDir.path) -o /Users/eben/RadioBar/build/AppIcon.icns")
+print("Run: iconutil -c icns \(outputDir.path) -o \(icnsPath)")
