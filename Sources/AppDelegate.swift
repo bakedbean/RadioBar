@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -15,6 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var statusItem: NSStatusItem!
 
+    // MARK: - Global hotkey
+
+    /// Retained for the app's lifetime so the ⌃⌥⌘+Space registration stays alive.
+    private var globalHotkey: GlobalHotkey?
+
     // MARK: - Menu items (rebuilt when state changes)
 
     private weak var nowPlayingItem: NSMenuItem?
@@ -30,6 +36,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupCallbacks()
+
+        // Global hotkey: ⌃⌥⌘+Space toggles play/pause from any app.
+        globalHotkey = GlobalHotkey(
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            handler: { [weak self] in self?.togglePlayPause() }
+        )
+        if globalHotkey == nil {
+            NSLog("RadioBar: global play/pause hotkey unavailable")
+        }
+
         setMenubarTitle(defaultText: "RadioBar")
 
         // Load last station and auto-play if the user wants
