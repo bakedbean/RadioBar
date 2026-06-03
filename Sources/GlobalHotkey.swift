@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import Carbon
 
 /// Registers a system-wide keyboard shortcut using the Carbon
@@ -9,6 +9,9 @@ import Carbon
 /// `deinit` unregisters it, so a dropped reference silently kills the shortcut.
 final class GlobalHotkey {
 
+    // Identifies RadioBar's hotkeys. 'RADI' as a four-char code; id distinguishes
+    // multiple hotkeys sharing this signature.
+    private let hotKeyID = EventHotKeyID(signature: OSType(0x5241_4449), id: 1)
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private let handler: () -> Void
@@ -30,13 +33,31 @@ final class GlobalHotkey {
 
         let installStatus = InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, userData -> OSStatus in
-                guard let userData else { return OSStatus(eventNotHandledErr) }
+            { _, event, userData -> OSStatus in
+                guard let userData, let event else { return OSStatus(eventNotHandledErr) }
                 let instance = Unmanaged<GlobalHotkey>.fromOpaque(userData).takeUnretainedValue()
+
+                // This process-level handler fires for every hotkey; only act on ours.
+                var firedID = EventHotKeyID()
+                let paramStatus = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &firedID
+                )
+                guard paramStatus == noErr,
+                      firedID.signature == instance.hotKeyID.signature,
+                      firedID.id == instance.hotKeyID.id else {
+                    return OSStatus(eventNotHandledErr)
+                }
+
                 DispatchQueue.main.async { instance.handler() }
                 return noErr
             },
-            1,
+            1, // one event type: kEventHotKeyPressed
             &eventType,
             selfPtr,
             &eventHandlerRef
@@ -48,7 +69,6 @@ final class GlobalHotkey {
 
         // Register the hotkey itself. The signature is an arbitrary 4-char code
         // ('RADI') that distinguishes RadioBar's hotkeys from other apps'.
-        let hotKeyID = EventHotKeyID(signature: OSType(0x5241_4449), id: 1)
         let registerStatus = RegisterEventHotKey(
             keyCode,
             modifiers,
