@@ -4,12 +4,20 @@ import AppKit
 /// Caches results in-memory to avoid redundant network calls.
 final class ArtworkFetcher {
 
-    private var cache: [String: NSImage] = [:]
+    /// What a lookup yields: cover art plus the track's release year, both
+    /// pulled from the same iTunes search result. Either may be nil.
+    struct TrackInfo {
+        let image: NSImage?
+        let year: Int?
+    }
+
+    private var cache: [String: TrackInfo] = [:]
     private var inFlight: Set<String> = []
 
-    /// Fetch artwork for a track. Returns cached result immediately if available.
-    /// Otherwise queries iTunes API and calls the callback on completion.
-    func fetch(artistSong: String, completion: @escaping (NSImage?) -> Void) {
+    /// Fetch artwork + release year for a track. Returns cached result
+    /// immediately if available. Otherwise queries iTunes API and calls the
+    /// callback on completion.
+    func fetch(artistSong: String, completion: @escaping (TrackInfo) -> Void) {
         // Return cached result
         if let cached = cache[artistSong] {
             completion(cached)
@@ -24,7 +32,7 @@ final class ArtworkFetcher {
         let urlString = "https://itunes.apple.com/search?term=\(encoded)&entity=song&limit=1"
         guard let url = URL(string: urlString) else {
             inFlight.remove(artistSong)
-            completion(nil)
+            completion(TrackInfo(image: nil, year: nil))
             return
         }
 
@@ -34,27 +42,42 @@ final class ArtworkFetcher {
             guard let data, error == nil,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["results"] as? [[String: Any]],
-                  let first = results.first,
-                  let artworkURLString = first["artworkUrl100"] as? String else {
-                DispatchQueue.main.async { completion(nil) }
+                  let first = results.first else {
+                DispatchQueue.main.async { completion(TrackInfo(image: nil, year: nil)) }
+                return
+            }
+
+            // releaseDate looks like "1994-03-01T08:00:00Z" — take the leading year.
+            let year = Self.parseYear(first["releaseDate"])
+
+            guard let artworkURLString = first["artworkUrl100"] as? String else {
+                // No artwork, but we may still have a year to show.
+                DispatchQueue.main.async { completion(TrackInfo(image: nil, year: year)) }
                 return
             }
 
             // Request 600x600 instead of 100x100
             let hiResURLString = artworkURLString.replacingOccurrences(of: "100x100", with: "600x600")
             guard let artworkURL = URL(string: hiResURLString) else {
-                DispatchQueue.main.async { completion(nil) }
+                DispatchQueue.main.async { completion(TrackInfo(image: nil, year: year)) }
                 return
             }
 
             URLSession.shared.dataTask(with: artworkURL) { [weak self] imageData, _, _ in
                 guard let imageData, let image = NSImage(data: imageData) else {
-                    DispatchQueue.main.async { completion(nil) }
+                    DispatchQueue.main.async { completion(TrackInfo(image: nil, year: year)) }
                     return
                 }
-                self?.cache[artistSong] = image
-                DispatchQueue.main.async { completion(image) }
+                let info = TrackInfo(image: image, year: year)
+                self?.cache[artistSong] = info
+                DispatchQueue.main.async { completion(info) }
             }.resume()
         }.resume()
+    }
+
+    /// Extracts the 4-digit year from an ISO-8601 release date string.
+    private static func parseYear(_ value: Any?) -> Int? {
+        guard let s = value as? String, s.count >= 4 else { return nil }
+        return Int(s.prefix(4))
     }
 }

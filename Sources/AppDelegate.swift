@@ -31,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private weak var playPauseItem: NSMenuItem?
     private weak var volumeSlider: NSSlider?
 
+    // Current track + its release year (from iTunes lookup), for the popup label.
+    private var currentTrack: String?
+    private var currentTrackYear: Int?
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -228,7 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func refreshNowPlayingUI(track: String?) {
         if let track, !track.isEmpty {
-            nowPlayingItem?.title = "Now Playing: \(track)"
+            if let year = currentTrackYear {
+                nowPlayingItem?.title = "Now Playing: \(track) (\(year))"
+            } else {
+                nowPlayingItem?.title = "Now Playing: \(track)"
+            }
             nowPlayingItem?.isEnabled = false
         } else if let station = player.currentStation {
             nowPlayingItem?.title = "Now Playing: \(station.name)"
@@ -261,8 +269,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Collapse before fetching — will expand if artwork found
         artworkContainer?.frame.size.height = 1
 
-        artworkFetcher.fetch(artistSong: track) { [weak self] image in
-            guard let self, let image else { return }
+        artworkFetcher.fetch(artistSong: track) { [weak self] info in
+            guard let self else { return }
+
+            // Surface the year on the popup label — but only if the track
+            // hasn't changed out from under this in-flight lookup.
+            if let year = info.year, track == self.currentTrack {
+                self.currentTrackYear = year
+                self.refreshNowPlayingUI(track: track)
+            }
+
+            guard let image = info.image else { return }
             // Expand to show artwork
             self.artworkContainer?.frame.size.height = 204  // imageSize + 12
             self.artworkImageView?.image = image
@@ -299,6 +316,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Metadata → update menubar title + now-playing label + artwork
         metadataParser.onTrackUpdate = { [weak self] track in
             DispatchQueue.main.async {
+                // New track — clear the previous year until the lookup fills it in.
+                self?.currentTrack = (track?.isEmpty == false) ? track : nil
+                self?.currentTrackYear = nil
                 self?.refreshNowPlayingUI(track: track)
                 if let track, !track.isEmpty {
                     self?.fetchArtwork(for: track)
@@ -371,6 +391,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func resetArtwork() {
         artworkContainer?.frame.size.height = 1
         artworkImageView?.image = nil
+        currentTrack = nil
+        currentTrackYear = nil
         // Restore radio antenna icon
         if let icon = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right",
                               accessibilityDescription: "RadioBar") {
