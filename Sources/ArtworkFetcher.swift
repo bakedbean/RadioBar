@@ -37,12 +37,11 @@ final class ArtworkFetcher {
         }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
-            defer { self?.inFlight.remove(artistSong) }
-
             guard let data, error == nil,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["results"] as? [[String: Any]],
                   let first = results.first else {
+                self?.inFlight.remove(artistSong)
                 DispatchQueue.main.async { completion(TrackInfo(image: nil, year: nil)) }
                 return
             }
@@ -52,6 +51,7 @@ final class ArtworkFetcher {
 
             guard let artworkURLString = first["artworkUrl100"] as? String else {
                 // No artwork, but we may still have a year to show.
+                self?.inFlight.remove(artistSong)
                 DispatchQueue.main.async { completion(TrackInfo(image: nil, year: year)) }
                 return
             }
@@ -59,11 +59,15 @@ final class ArtworkFetcher {
             // Request 600x600 instead of 100x100
             let hiResURLString = artworkURLString.replacingOccurrences(of: "100x100", with: "600x600")
             guard let artworkURL = URL(string: hiResURLString) else {
+                self?.inFlight.remove(artistSong)
                 DispatchQueue.main.async { completion(TrackInfo(image: nil, year: year)) }
                 return
             }
 
+            // Hold the in-flight marker until this nested download finishes — clearing
+            // it in the outer task would let a duplicate request start mid-download.
             URLSession.shared.dataTask(with: artworkURL) { [weak self] imageData, _, _ in
+                defer { self?.inFlight.remove(artistSong) }
                 guard let imageData, let image = NSImage(data: imageData) else {
                     DispatchQueue.main.async { completion(TrackInfo(image: nil, year: year)) }
                     return

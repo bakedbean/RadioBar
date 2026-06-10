@@ -272,9 +272,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         artworkFetcher.fetch(artistSong: track) { [weak self] info in
             guard let self else { return }
 
-            // Surface the year on the popup label — but only if the track
-            // hasn't changed out from under this in-flight lookup.
-            if let year = info.year, track == self.currentTrack {
+            // Ignore a lookup that resolved after the track changed — otherwise a
+            // slow response would stamp a stale year/artwork onto the new track.
+            guard track == self.currentTrack else { return }
+
+            if let year = info.year {
                 self.currentTrackYear = year
                 self.refreshNowPlayingUI(track: track)
             }
