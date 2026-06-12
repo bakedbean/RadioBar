@@ -12,6 +12,7 @@ Most menubar radio apps (Triode, etc.) hide track info behind a dropdown. RadioB
 - 10 built-in stations (WERS, KEXP, SomaFM, BBC 6, NTS, FIP, Radio Paradise)
 - Add your own stations via stream URL
 - Play/pause, volume control
+- Global play/pause hotkey: <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>Space</kbd> (works from any app)
 - No Dock icon — menubar only
 - Auto-adapts to light/dark mode
 
@@ -29,6 +30,14 @@ Most menubar radio apps (Triode, etc.) hide track info behind a dropdown. RadioB
 | NTS Radio 1 | Eclectic |
 | FIP | Eclectic |
 | Radio Paradise: Main Mix | Eclectic |
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>Space</kbd> | Toggle play/pause from any app |
+
+The play/pause hotkey is registered system-wide, so it works even when RadioBar isn't the focused app.
 
 ## Requirements
 
