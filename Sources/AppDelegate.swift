@@ -388,8 +388,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Fired when no real song has arrived for `staleTrackTimeout`. Drops the
     /// stale track so the UI falls back to the station name.
     private func clearStaleTrack() {
-        currentTrack = nil
-        currentTrackYear = nil
+        // Full reset (clears the track, collapses the album art, and restores the
+        // antenna icon) so stale artwork/thumbnail don't linger beside the
+        // station-name fallback and imply the old song is still playing.
+        resetArtwork()
         refreshNowPlayingUI(track: nil)
     }
 
