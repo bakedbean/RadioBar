@@ -34,6 +34,7 @@ run: build
 capture:
 	@mkdir -p $(BUILD_DIR)
 	swiftc -o $(BUILD_DIR)/capture-metadata Sources/MetadataParser.swift tools/capture_metadata.swift
+	./$(BUILD_DIR)/capture-metadata
 
 clean:
 	rm -rf $(BUILD_DIR)
