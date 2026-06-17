@@ -35,6 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var currentTrack: String?
     private var currentTrackYear: Int?
 
+    // One-shot timer that clears the displayed track after a long music gap, so
+    // an ended song doesn't linger forever during news/long talk segments. Reset
+    // on every real song; fires only when no song has arrived for the timeout.
+    private var staleTrackTimer: Timer?
+    private let staleTrackTimeout: TimeInterval = 7 * 60  // long enough to survive a talk break, short enough not to show an ended song after a stop
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -315,16 +321,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
-        // Metadata → update menubar title + now-playing label + artwork
+        // Metadata → update display only for *real songs*. WERS pushes a generic
+        // station tagline between songs; ignoring it keeps the last real track on
+        // screen. The staleness timer handles eventual fallback to the station.
         metadataParser.onTrackUpdate = { [weak self] track in
             DispatchQueue.main.async {
-                // New track — clear the previous year until the lookup fills it in.
-                self?.currentTrack = (track?.isEmpty == false) ? track : nil
-                self?.currentTrackYear = nil
-                self?.refreshNowPlayingUI(track: track)
-                if let track, !track.isEmpty {
-                    self?.fetchArtwork(for: track)
+                guard let self else { return }
+                guard let track, TrackClassifier.isLikelySong(track) else {
+                    // Tagline or junk — keep the last real track. If we don't have
+                    // one yet (connected mid-tagline), show the station-name
+                    // fallback instead of a lingering "Loading..." label.
+                    if self.currentTrack == nil {
+                        self.refreshNowPlayingUI(track: nil)
+                    }
+                    return
                 }
+                // New song — clear the previous year until the lookup fills it in.
+                self.currentTrack = track
+                self.currentTrackYear = nil
+                self.refreshNowPlayingUI(track: track)
+                self.fetchArtwork(for: track)
+                self.startStaleTrackTimer()
             }
         }
 
@@ -357,6 +374,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.metadataParser.connect(to: url)
             }
         }
+    }
+
+    /// (Re)start the one-shot staleness timer. Called on every real song.
+    private func startStaleTrackTimer() {
+        staleTrackTimer?.invalidate()
+        staleTrackTimer = Timer.scheduledTimer(withTimeInterval: staleTrackTimeout,
+                                                repeats: false) { [weak self] _ in
+            self?.clearStaleTrack()
+        }
+    }
+
+    /// Fired when no real song has arrived for `staleTrackTimeout`. Drops the
+    /// stale track so the UI falls back to the station name.
+    private func clearStaleTrack() {
+        // Full reset (clears the track, collapses the album art, and restores the
+        // antenna icon) so stale artwork/thumbnail don't linger beside the
+        // station-name fallback and imply the old song is still playing.
+        resetArtwork()
+        refreshNowPlayingUI(track: nil)
     }
 
     // MARK: - Actions
@@ -395,6 +431,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         artworkImageView?.image = nil
         currentTrack = nil
         currentTrackYear = nil
+        staleTrackTimer?.invalidate()
+        staleTrackTimer = nil
         // Restore radio antenna icon
         if let icon = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right",
                               accessibilityDescription: "RadioBar") {
