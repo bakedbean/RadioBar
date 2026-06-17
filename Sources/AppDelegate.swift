@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // an ended song doesn't linger forever during news/long talk segments. Reset
     // on every real song; fires only when no song has arrived for the timeout.
     private var staleTrackTimer: Timer?
-    private let staleTrackTimeout: TimeInterval = 7 * 60  // adjust per Task 1 cadence
+    private let staleTrackTimeout: TimeInterval = 7 * 60  // long enough to survive a talk break, short enough not to show an ended song after a stop
 
     // MARK: - NSApplicationDelegate
 
@@ -328,7 +328,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard let track, TrackClassifier.isLikelySong(track) else {
-                    return  // tagline or junk — retain the current track
+                    // Tagline or junk — keep the last real track. If we don't have
+                    // one yet (connected mid-tagline), show the station-name
+                    // fallback instead of a lingering "Loading..." label.
+                    if self.currentTrack == nil {
+                        self.refreshNowPlayingUI(track: nil)
+                    }
+                    return
                 }
                 // New song — clear the previous year until the lookup fills it in.
                 self.currentTrack = track
