@@ -1,0 +1,9 @@
+// Add "custom/radio" to one of the modules arrays in ~/.config/waybar/config.jsonc
+// (e.g. "modules-right"), then paste this block among the module definitions:
+"custom/radio": {
+  "exec": "radiobar status",
+  "return-type": "json",
+  "on-click": "radiobar toggle",
+  "on-click-right": "radiobar menu",
+  "tooltip": true
+}

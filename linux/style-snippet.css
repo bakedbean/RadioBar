@@ -1,0 +1,13 @@
+/* Append to ~/.config/waybar/style.css */
+#custom-radio {
+  padding: 0 10px;
+}
+
+#custom-radio.playing {
+  color: @foreground;
+}
+
+#custom-radio.paused,
+#custom-radio.idle {
+  opacity: 0.5;
+}
