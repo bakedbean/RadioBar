@@ -3,7 +3,9 @@ import importlib.machinery
 import importlib.util
 import json
 import pathlib
+import socketserver
 import sys
+import threading
 
 
 def _load():
@@ -146,3 +148,100 @@ class TestStatusTracker:
         out = t.handle_event({"event": "property-change",
                               "name": "metadata/by-key/icy-title", "data": None})
         assert "FIP" in out["text"]
+
+
+class TestLastStation:
+    def test_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        rb.write_last("NTS Radio 1")
+        assert rb.read_last() == "NTS Radio 1"
+
+    def test_missing_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        assert rb.read_last() is None
+
+
+class _FakeMpvHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        line = self.rfile.readline()
+        req = json.loads(line)
+        self.server.received.append(req)
+        resp = {"request_id": req.get("request_id", 0), "error": "success",
+                "data": None}
+        self.wfile.write(json.dumps(resp).encode() + b"\n")
+
+
+class TestIpcCommand:
+    def test_sends_command_and_parses_response(self, tmp_path, monkeypatch):
+        sock_path = tmp_path / "radiobar.sock"
+        monkeypatch.setenv("RADIOBAR_SOCK", str(sock_path))
+        server = socketserver.UnixStreamServer(str(sock_path), _FakeMpvHandler)
+        server.received = []
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        resp = rb.ipc_command(["cycle", "pause"])
+        thread.join(timeout=5)
+        server.server_close()
+        assert resp is not None and resp["error"] == "success"
+        assert server.received[0]["command"] == ["cycle", "pause"]
+
+    def test_no_socket_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_SOCK", str(tmp_path / "absent.sock"))
+        assert rb.ipc_command(["cycle", "pause"]) is None
+
+    def test_stale_socket_file_returns_none(self, tmp_path, monkeypatch):
+        stale = tmp_path / "stale.sock"
+        stale.touch()  # plain file, not a socket → connect fails
+        monkeypatch.setenv("RADIOBAR_SOCK", str(stale))
+        assert rb.ipc_command(["cycle", "pause"]) is None
+
+
+class TestToggle:
+    def test_running_mpv_gets_cycle_pause(self, monkeypatch):
+        sent = []
+        monkeypatch.setattr(rb, "ipc_command",
+                            lambda args: sent.append(args) or {"error": "success"})
+        assert rb.cmd_toggle() == 0
+        assert sent == [["cycle", "pause"]]
+
+    def test_cold_start_launches_last_station(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        rb.write_last("FIP")
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        launched = []
+        monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
+        assert rb.cmd_toggle() == 0
+        assert launched[0]["name"] == "FIP"
+
+    def test_cold_start_no_history_uses_first_station(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        launched = []
+        monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
+        assert rb.cmd_toggle() == 0
+        assert launched[0]["name"] == rb.BUILTIN_STATIONS[0]["name"]
+
+
+class TestPlay:
+    def test_known_station_by_name(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        launched = []
+        monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
+        assert rb.cmd_play("fip") == 0
+        assert launched[0]["name"] == "FIP"
+
+    def test_raw_url(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        launched = []
+        monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
+        assert rb.cmd_play("https://example.com/stream.mp3") == 0
+        assert launched[0]["streamURL"] == "https://example.com/stream.mp3"
+
+    def test_unknown_name_errors(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        assert rb.cmd_play("Nope FM") == 1
+        assert "unknown station" in capsys.readouterr().err
