@@ -9,6 +9,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ICON_PLAY = "\U000f040a"   # 󰐊
@@ -252,9 +253,77 @@ def cmd_stop() -> int:
     return 0
 
 
-def main(argv):
-    print("radiobar: no command yet", file=sys.stderr)
-    return 1
+def emit(d: dict):
+    print(json.dumps(d, separators=(",", ":")), flush=True)
+
+
+def watch(sock):
+    """Observe mpv properties on an open socket; emit bar updates until it closes."""
+    tracker = StatusTracker(read_last() or "")
+    for i, prop in enumerate(OBSERVED_PROPS, start=1):
+        sock.sendall(json.dumps({"command": ["observe_property", i, prop]})
+                     .encode() + b"\n")
+    emit(tracker.output())
+    buf = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise OSError("mpv socket closed")
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            out = tracker.handle_event(ev)
+            if out is not None:
+                emit(out)
+
+
+def cmd_status() -> int:
+    while True:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(str(socket_path()))
+        except OSError:
+            s.close()
+            emit(waybar_output(running=False))
+            time.sleep(2)
+            continue
+        try:
+            watch(s)
+        except OSError:
+            pass
+        finally:
+            s.close()
+        emit(waybar_output(running=False))
+        time.sleep(2)
+
+
+USAGE = "usage: radiobar status|toggle|play <name-or-url>|stop|menu"
+
+
+def main(argv) -> int:
+    if not argv:
+        print(USAGE, file=sys.stderr)
+        return 2
+    cmd, args = argv[0], argv[1:]
+    if cmd == "status":
+        return cmd_status()
+    if cmd == "toggle":
+        return cmd_toggle()
+    if cmd == "play":
+        if len(args) != 1:
+            print(USAGE, file=sys.stderr)
+            return 2
+        return cmd_play(args[0])
+    if cmd == "stop":
+        return cmd_stop()
+    if cmd == "menu":
+        return cmd_menu()
+    print(USAGE, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

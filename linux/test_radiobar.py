@@ -317,3 +317,67 @@ class TestLaunchMpv:
         assert kwargs["stdout"] is rb.subprocess.DEVNULL
         assert kwargs["stderr"] is rb.subprocess.DEVNULL
         assert rb.read_last() == "FIP"
+
+
+class TestEmit:
+    def test_one_compact_json_line(self, capsys):
+        rb.emit({"text": "x", "tooltip": "t", "class": "playing"})
+        out = capsys.readouterr().out
+        assert out.endswith("\n") and out.count("\n") == 1
+        assert json.loads(out) == {"text": "x", "tooltip": "t", "class": "playing"}
+
+
+class TestWatch:
+    def test_observes_props_emits_updates_and_raises_on_close(
+            self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        rb.write_last("FIP")
+        sock_path = tmp_path / "radiobar.sock"
+
+        received = []
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self):
+                for _ in rb.OBSERVED_PROPS:
+                    received.append(json.loads(self.rfile.readline()))
+                ev = {"event": "property-change",
+                      "name": "metadata/by-key/icy-title", "data": "A - B"}
+                self.wfile.write(json.dumps(ev).encode() + b"\n")
+                # then close the connection → watch must raise OSError
+
+        server = socketserver.UnixStreamServer(str(sock_path), Handler)
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+
+        import socket as socket_mod
+        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        client.connect(str(sock_path))
+        try:
+            import pytest
+            with pytest.raises(OSError):
+                rb.watch(client)
+        finally:
+            client.close()
+            thread.join(timeout=5)
+            server.server_close()
+
+        assert [r["command"][2] for r in received] == rb.OBSERVED_PROPS
+        lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
+        # initial state, then the icy-title update
+        assert any("A - B" in l["text"] for l in lines)
+
+
+class TestMainDispatch:
+    def test_unknown_command_usage(self, capsys):
+        assert rb.main(["bogus"]) == 2
+        assert "usage" in capsys.readouterr().err.lower()
+
+    def test_no_command_usage(self, capsys):
+        assert rb.main([]) == 2
+
+    def test_toggle_dispatches(self, monkeypatch):
+        monkeypatch.setattr(rb, "cmd_toggle", lambda: 0)
+        assert rb.main(["toggle"]) == 0
+
+    def test_play_requires_arg(self, capsys):
+        assert rb.main(["play"]) == 2
