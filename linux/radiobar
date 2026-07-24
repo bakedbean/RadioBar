@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""RadioBar for waybar — internet radio with live track info in the bar.
+
+Subcommands: status | toggle | play <name-or-url> | stop | menu
+Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+ICON_PLAY = "\U000f040a"   # 󰐊
+ICON_PAUSE = "\U000f03e4"  # 󰏤
+ICON_IDLE = "\U000f0439"   # 󰐹
+TITLE_LIMIT = 40
+
+BUILTIN_STATIONS = [
+    {"name": "WERS 88.9 FM",
+     "streamURL": "https://playerservices.streamtheworld.com/api/livestream-redirect/WERSFMAAC.aac",
+     "genre": "College/Eclectic", "websiteURL": "https://wers.org"},
+    {"name": "KEXP 90.3 FM",
+     "streamURL": "https://kexp.streamguys1.com/kexp160.aac",
+     "genre": "Eclectic", "websiteURL": "https://kexp.org"},
+    {"name": "SomaFM: Groove Salad",
+     "streamURL": "https://ice3.somafm.com/groovesalad-256-mp3",
+     "genre": "Ambient/Downtempo", "websiteURL": "https://somafm.com"},
+    {"name": "SomaFM: Secret Agent",
+     "streamURL": "https://ice3.somafm.com/secretagent-128-mp3",
+     "genre": "Spy/Lounge", "websiteURL": "https://somafm.com"},
+    {"name": "SomaFM: Drone Zone",
+     "streamURL": "https://ice3.somafm.com/dronezone-256-mp3",
+     "genre": "Ambient/Drone", "websiteURL": "https://somafm.com"},
+    {"name": "SomaFM: Lush",
+     "streamURL": "https://ice3.somafm.com/lush-128-mp3",
+     "genre": "Vocal/Electronic", "websiteURL": "https://somafm.com"},
+    {"name": "BBC Radio 6 Music",
+     "streamURL": "https://a.files.bbci.co.uk/media/live/manifesto/audio/simulcast/hls/nonuk/sbr_vlow/ak/bbc_6music.m3u8",
+     "genre": "Eclectic", "websiteURL": "https://www.bbc.co.uk/6music"},
+    {"name": "NTS Radio 1",
+     "streamURL": "https://stream-relay-geo.ntslive.net/stream",
+     "genre": "Eclectic", "websiteURL": "https://nts.live"},
+    {"name": "FIP",
+     "streamURL": "https://icecast.radiofrance.fr/fip-midfi.mp3",
+     "genre": "Eclectic", "websiteURL": "https://www.radiofrance.fr/fip"},
+    {"name": "Radio Paradise: Main Mix",
+     "streamURL": "https://stream.radioparadise.com/aac-320",
+     "genre": "Eclectic", "websiteURL": "https://radioparadise.com"},
+]
+
+
+def config_dir() -> Path:
+    override = os.environ.get("RADIOBAR_CONFIG_DIR")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+    return Path(base) / "radiobar"
+
+
+def state_dir() -> Path:
+    override = os.environ.get("RADIOBAR_STATE_DIR")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+    return Path(base) / "radiobar"
+
+
+def stations_path() -> Path:
+    return config_dir() / "stations.json"
+
+
+def load_stations() -> list:
+    path = stations_path()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(BUILTIN_STATIONS, indent=2) + "\n")
+        return list(BUILTIN_STATIONS)
+    try:
+        data = json.loads(path.read_text())
+        if (isinstance(data, list) and data
+                and all(isinstance(s, dict) and "name" in s and "streamURL" in s
+                        for s in data)):
+            return data
+        raise ValueError("unexpected shape")
+    except Exception as exc:
+        print(f"radiobar: bad stations.json ({exc}), using built-ins",
+              file=sys.stderr)
+        return list(BUILTIN_STATIONS)
+
+
+def find_station(stations: list, name: str):
+    for s in stations:
+        if s["name"].lower() == name.lower():
+            return s
+    return None
+
+
+def main(argv):
+    print("radiobar: no command yet", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
