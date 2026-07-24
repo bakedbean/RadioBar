@@ -107,3 +107,42 @@ class TestWaybarOutput:
                                station_name="NTS Radio 1")
         assert len(out["text"]) <= len(rb.ICON_PLAY) + 1 + rb.TITLE_LIMIT
         assert long_title in out["tooltip"]
+
+
+class TestStatusTracker:
+    def test_initial_output_is_playing_station_name(self):
+        t = rb.StatusTracker("FIP")
+        out = t.output()
+        assert out["class"] == "playing" and "FIP" in out["text"]
+
+    def test_icy_title_event_updates_text(self):
+        t = rb.StatusTracker("FIP")
+        out = t.handle_event({"event": "property-change",
+                              "name": "metadata/by-key/icy-title",
+                              "data": "Air - La Femme d'Argent"})
+        assert out is not None
+        assert "Air - La Femme d'Argent" in out["text"]
+
+    def test_pause_event_switches_state(self):
+        t = rb.StatusTracker("FIP")
+        t.handle_event({"event": "property-change",
+                        "name": "metadata/by-key/icy-title", "data": "A - B"})
+        out = t.handle_event({"event": "property-change",
+                              "name": "pause", "data": True})
+        assert out["class"] == "paused"
+        out = t.handle_event({"event": "property-change",
+                              "name": "pause", "data": False})
+        assert out["class"] == "playing" and "A - B" in out["text"]
+
+    def test_irrelevant_events_return_none(self):
+        t = rb.StatusTracker("FIP")
+        assert t.handle_event({"event": "playback-restart"}) is None
+        assert t.handle_event({"request_id": 1, "error": "success"}) is None
+
+    def test_null_icy_data_falls_back(self):
+        t = rb.StatusTracker("FIP")
+        t.handle_event({"event": "property-change",
+                        "name": "metadata/by-key/icy-title", "data": "A - B"})
+        out = t.handle_event({"event": "property-change",
+                              "name": "metadata/by-key/icy-title", "data": None})
+        assert "FIP" in out["text"]

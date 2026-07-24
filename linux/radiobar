@@ -122,6 +122,38 @@ def waybar_output(*, running: bool, paused: bool = False, icy_title=None,
             "tooltip": f"{title}\n{station_name}".strip(), "class": "playing"}
 
 
+OBSERVED_PROPS = ["metadata/by-key/icy-title", "media-title", "pause"]
+
+
+class StatusTracker:
+    """Folds mpv property-change events into waybar output dicts."""
+
+    def __init__(self, station_name: str):
+        self.station = station_name
+        self.icy = None
+        self.media = None
+        self.paused = False
+
+    def handle_event(self, ev: dict):
+        if ev.get("event") != "property-change":
+            return None
+        name, data = ev.get("name"), ev.get("data")
+        if name == "metadata/by-key/icy-title":
+            self.icy = data or None
+        elif name == "media-title":
+            self.media = data or None
+        elif name == "pause":
+            self.paused = bool(data)
+        else:
+            return None
+        return self.output()
+
+    def output(self) -> dict:
+        return waybar_output(running=True, paused=self.paused,
+                             icy_title=self.icy, media_title=self.media,
+                             station_name=self.station)
+
+
 def main(argv):
     print("radiobar: no command yet", file=sys.stderr)
     return 1
