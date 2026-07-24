@@ -38,7 +38,7 @@ BUILTIN_STATIONS = [
      "streamURL": "https://ice3.somafm.com/lush-128-mp3",
      "genre": "Vocal/Electronic", "websiteURL": "https://somafm.com"},
     {"name": "BBC Radio 6 Music",
-     "streamURL": "https://a.files.bbci.co.uk/media/live/manifesto/audio/simulcast/hls/nonuk/sbr_vlow/ak/bbc_6music.m3u8",
+     "streamURL": "http://as-hls-ww-live.akamaized.net/pool_81827798/live/ww/bbc_6music/bbc_6music.isml/bbc_6music-audio%3d96000.norewind.m3u8",
      "genre": "Eclectic", "websiteURL": "https://www.bbc.co.uk/6music"},
     {"name": "NTS Radio 1",
      "streamURL": "https://stream-relay-geo.ntslive.net/stream",
