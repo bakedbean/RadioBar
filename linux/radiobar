@@ -94,6 +94,34 @@ def find_station(stations: list, name: str):
     return None
 
 
+def truncate(s: str, limit: int = TITLE_LIMIT) -> str:
+    if len(s) <= limit:
+        return s
+    return s[:limit - 1].rstrip() + "…"
+
+
+def pick_title(icy_title, media_title, station_name) -> str:
+    for candidate in (icy_title, media_title):
+        if not candidate:
+            continue
+        candidate = candidate.strip()
+        if candidate and not candidate.lower().startswith(("http://", "https://")):
+            return candidate
+    return station_name
+
+
+def waybar_output(*, running: bool, paused: bool = False, icy_title=None,
+                  media_title=None, station_name: str = "") -> dict:
+    if not running:
+        return {"text": ICON_IDLE, "tooltip": "RadioBar: off", "class": "idle"}
+    if paused:
+        return {"text": f"{ICON_PAUSE} {truncate(station_name)}",
+                "tooltip": f"Paused — {station_name}", "class": "paused"}
+    title = pick_title(icy_title, media_title, station_name)
+    return {"text": f"{ICON_PLAY} {truncate(title)}",
+            "tooltip": f"{title}\n{station_name}".strip(), "class": "playing"}
+
+
 def main(argv):
     print("radiobar: no command yet", file=sys.stderr)
     return 1

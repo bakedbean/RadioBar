@@ -56,3 +56,54 @@ class TestFindStation:
 
     def test_unknown_returns_none(self):
         assert rb.find_station(rb.BUILTIN_STATIONS, "Nope FM") is None
+
+
+class TestTruncate:
+    def test_short_unchanged(self):
+        assert rb.truncate("abc") == "abc"
+
+    def test_long_gets_ellipsis_within_limit(self):
+        out = rb.truncate("x" * 60)
+        assert len(out) == rb.TITLE_LIMIT
+        assert out.endswith("…")
+
+
+class TestPickTitle:
+    def test_icy_wins(self):
+        assert rb.pick_title("A - B", "media", "St") == "A - B"
+
+    def test_falls_back_to_media_title(self):
+        assert rb.pick_title(None, "Show Name", "St") == "Show Name"
+
+    def test_url_media_title_skipped(self):
+        # BBC HLS: mpv's media-title is just the stream URL — useless
+        assert rb.pick_title(None, "https://a.files.bbci.co.uk/x.m3u8", "BBC 6") == "BBC 6"
+
+    def test_blank_values_skipped(self):
+        assert rb.pick_title("  ", "", "St") == "St"
+
+
+class TestWaybarOutput:
+    def test_idle(self):
+        out = rb.waybar_output(running=False)
+        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
+
+    def test_paused_shows_station(self):
+        out = rb.waybar_output(running=True, paused=True, station_name="FIP")
+        assert out["class"] == "paused"
+        assert out["text"] == f"{rb.ICON_PAUSE} FIP"
+
+    def test_playing_shows_title_and_tooltip(self):
+        out = rb.waybar_output(running=True, icy_title="Artist - Song",
+                               station_name="KEXP 90.3 FM")
+        assert out["class"] == "playing"
+        assert out["text"] == f"{rb.ICON_PLAY} Artist - Song"
+        assert "Artist - Song" in out["tooltip"]
+        assert "KEXP 90.3 FM" in out["tooltip"]
+
+    def test_playing_long_title_truncated_in_text_not_tooltip(self):
+        long_title = "The Extraordinarily Long Band Name - An Even Longer Song Title"
+        out = rb.waybar_output(running=True, icy_title=long_title,
+                               station_name="NTS Radio 1")
+        assert len(out["text"]) <= len(rb.ICON_PLAY) + 1 + rb.TITLE_LIMIT
+        assert long_title in out["tooltip"]
