@@ -172,18 +172,21 @@ def ipc_command(args: list):
             s.connect(str(socket_path()))
             s.sendall(json.dumps({"command": args}).encode() + b"\n")
             buf = b""
-            while b"\n" not in buf:
+            while True:
                 chunk = s.recv(4096)
                 if not chunk:
                     return None
                 buf += chunk
-            for line in buf.split(b"\n"):
-                if not line:
-                    continue
-                resp = json.loads(line)
-                if "error" in resp:
-                    return resp
-            return None
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if not line:
+                        continue
+                    try:
+                        resp = json.loads(line)
+                    except ValueError:
+                        continue
+                    if "error" in resp:
+                        return resp
     except (OSError, ValueError):
         return None
 

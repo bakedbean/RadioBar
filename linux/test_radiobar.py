@@ -6,6 +6,7 @@ import pathlib
 import socketserver
 import sys
 import threading
+import time
 
 
 def _load():
@@ -171,6 +172,29 @@ class _FakeMpvHandler(socketserver.StreamRequestHandler):
         self.wfile.write(json.dumps(resp).encode() + b"\n")
 
 
+class _PartialLineMpvHandler(socketserver.StreamRequestHandler):
+    """Simulates mpv dribbling an unsolicited event plus a split response
+    line across multiple writes, to exercise buffered/partial-line parsing."""
+
+    def handle(self):
+        line = self.rfile.readline()
+        req = json.loads(line)
+        self.server.received.append(req)
+        resp = {"request_id": req.get("request_id", 0), "error": "success",
+                "data": None}
+        event = json.dumps({"event": "playback-restart"}) + "\n"
+        resp_json = json.dumps(resp) + "\n"
+        # Write an unsolicited event, then a PARTIAL fragment of the real
+        # response (no trailing newline) in the same write.
+        split_at = len(resp_json) // 2
+        self.wfile.write(event.encode())
+        self.wfile.write(resp_json[:split_at].encode())
+        self.wfile.flush()
+        time.sleep(0.05)
+        # Complete the fragment in a second write.
+        self.wfile.write(resp_json[split_at:].encode())
+
+
 class TestIpcCommand:
     def test_sends_command_and_parses_response(self, tmp_path, monkeypatch):
         sock_path = tmp_path / "radiobar.sock"
@@ -194,6 +218,24 @@ class TestIpcCommand:
         stale.touch()  # plain file, not a socket → connect fails
         monkeypatch.setenv("RADIOBAR_SOCK", str(stale))
         assert rb.ipc_command(["cycle", "pause"]) is None
+
+    def test_partial_line_across_recvs_still_parses_response(
+            self, tmp_path, monkeypatch):
+        # Regression: an unsolicited event line followed by a response line
+        # split across two writes must not be treated as "mpv unreachable".
+        sock_path = tmp_path / "radiobar.sock"
+        monkeypatch.setenv("RADIOBAR_SOCK", str(sock_path))
+        server = socketserver.UnixStreamServer(str(sock_path),
+                                                _PartialLineMpvHandler)
+        server.received = []
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        resp = rb.ipc_command(["cycle", "pause"])
+        thread.join(timeout=5)
+        server.server_close()
+        assert resp is not None, "ipc_command incorrectly returned None"
+        assert resp["error"] == "success"
+        assert server.received[0]["command"] == ["cycle", "pause"]
 
 
 class TestToggle:
@@ -245,3 +287,33 @@ class TestPlay:
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
         assert rb.cmd_play("Nope FM") == 1
         assert "unknown station" in capsys.readouterr().err
+
+
+class _FakePopen:
+    def __init__(self, argv, **kwargs):
+        _FakePopen.calls.append((argv, kwargs))
+
+
+class TestLaunchMpv:
+    def test_spawns_mpv_with_expected_argv(self, tmp_path, monkeypatch):
+        sock_path = tmp_path / "radiobar.sock"
+        monkeypatch.setenv("RADIOBAR_SOCK", str(sock_path))
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        _FakePopen.calls = []
+        monkeypatch.setattr(rb.subprocess, "Popen", _FakePopen)
+
+        station = {"name": "FIP", "streamURL": "https://example.com/s.mp3",
+                   "genre": "", "websiteURL": None}
+        rb.launch_mpv(station)
+
+        assert len(_FakePopen.calls) == 1
+        argv, kwargs = _FakePopen.calls[0]
+        assert argv == [
+            "mpv", "--no-video", f"--input-ipc-server={sock_path}",
+            "--stream-lavf-o=reconnect_streamed=1,reconnect_delay_max=10",
+            "https://example.com/s.mp3",
+        ]
+        assert kwargs["start_new_session"] is True
+        assert kwargs["stdout"] is rb.subprocess.DEVNULL
+        assert kwargs["stderr"] is rb.subprocess.DEVNULL
+        assert rb.read_last() == "FIP"
