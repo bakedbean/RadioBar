@@ -6,6 +6,7 @@ Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -246,6 +247,29 @@ def cmd_play(arg: str) -> int:
     ipc_command(["quit"])
     launch_mpv(station)
     return 0
+
+
+def find_menu_cmd(which=shutil.which):
+    if which("walker"):
+        return ["walker", "--dmenu"]
+    if which("fuzzel"):
+        return ["fuzzel", "-d"]
+    return None
+
+
+def cmd_menu(run=subprocess.run) -> int:
+    menu = find_menu_cmd()
+    if menu is None:
+        run(["notify-send", "RadioBar",
+             "No menu tool found (install walker or fuzzel)"])
+        return 1
+    stations = load_stations()
+    names = "\n".join(s["name"] for s in stations) + "\n"
+    result = run(menu, input=names, capture_output=True, text=True)
+    choice = result.stdout.strip()
+    if not choice:
+        return 0
+    return cmd_play(choice)
 
 
 def cmd_stop() -> int:

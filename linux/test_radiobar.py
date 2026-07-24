@@ -381,3 +381,64 @@ class TestMainDispatch:
 
     def test_play_requires_arg(self, capsys):
         assert rb.main(["play"]) == 2
+
+
+class TestFindMenuCmd:
+    def test_prefers_walker(self):
+        which = lambda name: "/usr/bin/" + name  # both installed
+        assert rb.find_menu_cmd(which) == ["walker", "--dmenu"]
+
+    def test_falls_back_to_fuzzel(self):
+        which = lambda name: "/usr/bin/fuzzel" if name == "fuzzel" else None
+        assert rb.find_menu_cmd(which) == ["fuzzel", "-d"]
+
+    def test_none_when_neither(self):
+        assert rb.find_menu_cmd(lambda name: None) is None
+
+
+class TestCmdMenu:
+    def _fake_run(self, stdout):
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            class R:
+                pass
+            r = R()
+            r.stdout = stdout
+            r.returncode = 0
+            return r
+        return run, calls
+
+    def test_selection_is_played(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        played = []
+        monkeypatch.setattr(rb, "cmd_play", lambda name: played.append(name) or 0)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, calls = self._fake_run("FIP\n")
+        assert rb.cmd_menu(run=run) == 0
+        assert played == ["FIP"]
+        # the station list was piped in
+        assert "FIP" in calls[0][1]["input"]
+
+    def test_empty_selection_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        played = []
+        monkeypatch.setattr(rb, "cmd_play", lambda name: played.append(name) or 0)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, _ = self._fake_run("")
+        assert rb.cmd_menu(run=run) == 0
+        assert played == []
+
+    def test_no_menu_tool_notifies_and_fails(self, monkeypatch):
+        monkeypatch.setattr(rb, "find_menu_cmd", lambda which=None: None)
+        notified = []
+        run, _ = self._fake_run("")
+
+        def run_capture(cmd, **kwargs):
+            notified.append(cmd)
+            return run(cmd, **kwargs)
+        assert rb.cmd_menu(run=run_capture) == 1
+        assert notified and notified[0][0] == "notify-send"
