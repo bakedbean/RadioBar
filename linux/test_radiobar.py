@@ -525,6 +525,22 @@ class TestItunesLookup:
         fake = _FakeHTTP({"itunes.apple.com": OSError("down")})
         assert rb.itunes_lookup("x", urlopen=fake) == {"art_url": None, "year": None}
 
+    def test_incomplete_read_returns_empty(self):
+        import http.client
+
+        class _RaisingResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                raise http.client.IncompleteRead(b"partial")
+
+        fake = lambda url, timeout=None: _RaisingResp()
+        assert rb.itunes_lookup("x", urlopen=fake) == {"art_url": None, "year": None}
+
 
 class TestArtCache:
     def test_fetch_stores_and_second_call_skips_network(self, tmp_path, monkeypatch):
@@ -549,3 +565,51 @@ class TestArtCache:
         fake2 = _FakeHTTP({})
         again = rb.fetch_track_art("Obscure - Track", urlopen=fake2)
         assert again["found"] is False and fake2.calls == []
+
+    def test_incomplete_read_on_image_is_treated_as_miss(self, tmp_path, monkeypatch):
+        import http.client
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        api = json.dumps({"results": [{
+            "artworkUrl100": "https://img.example/100x100bb.jpg",
+            "releaseDate": "1990-06-01"}]}).encode()
+
+        class _RaisingImgResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                raise http.client.IncompleteRead(b"partial")
+
+        def fake(url, timeout=None):
+            if "itunes.apple.com" in url:
+                import io
+
+                class R(io.BytesIO):
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+                return R(api)
+            if "img.example" in url:
+                return _RaisingImgResp()
+            raise OSError("no fake for " + url)
+
+        info = rb.fetch_track_art("A - B", urlopen=fake)
+        assert info["found"] is False
+        assert info["jpg"] is None
+
+        # the miss is cached: a second call must not touch the network
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_track_art("A - B", urlopen=fake2)
+        assert again["found"] is False and fake2.calls == []
+
+    def test_non_dict_meta_json_is_treated_as_no_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        _, meta = rb.art_cache_paths("Some Title")
+        meta.parent.mkdir(parents=True, exist_ok=True)
+        meta.write_text(json.dumps([1, 2]))
+        assert rb.cached_track_info("Some Title") is None

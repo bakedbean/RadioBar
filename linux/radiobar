@@ -5,6 +5,7 @@ Subcommands: status | toggle | play <name-or-url> | stop | menu
 Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
 """
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -143,7 +144,7 @@ def itunes_lookup(title: str, urlopen=urllib.request.urlopen) -> dict:
     try:
         with urlopen(url, timeout=10) as resp:
             return parse_itunes_response(resp.read())
-    except OSError:
+    except (OSError, http.client.HTTPException):
         return {"art_url": None, "year": None}
 
 
@@ -156,6 +157,8 @@ def cached_track_info(title: str):
     jpg, meta = art_cache_paths(title)
     try:
         info = json.loads(meta.read_text())
+        if not isinstance(info, dict):
+            return None
     except (OSError, ValueError):
         return None
     found = bool(info.get("found")) and jpg.exists()
@@ -185,7 +188,7 @@ def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
         try:
             with urlopen(info["art_url"], timeout=10) as resp:
                 image_data = resp.read()
-        except OSError:
+        except (OSError, http.client.HTTPException):
             image_data = None
     store_track_info(title, year=info["year"], image_data=image_data)
     jpg, _ = art_cache_paths(title)
