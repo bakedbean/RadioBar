@@ -120,12 +120,13 @@ def art_path() -> Path:
     if override:
         return Path(override)
     runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    return Path(runtime) / "radiobar-art.png"
+    return Path(runtime) / "radiobar-art.jpg"
 
 
 def parse_itunes_response(data: bytes) -> dict:
-    """iTunes Search API payload -> {"art_url", "year"} (both may be None)."""
-    empty = {"art_url": None, "year": None}
+    """iTunes Search API payload -> {"art_url", "art_url_small", "year"}
+    (all may be None)."""
+    empty = {"art_url": None, "art_url_small": None, "year": None}
     try:
         first = json.loads(data)["results"][0]
     except (ValueError, KeyError, IndexError, TypeError):
@@ -135,8 +136,9 @@ def parse_itunes_response(data: bytes) -> dict:
     if isinstance(release, str) and release[:4].isdigit():
         year = int(release[:4])
     art = first.get("artworkUrl100")
+    art_url_small = art if isinstance(art, str) else None
     art_url = art.replace("100x100", "600x600") if isinstance(art, str) else None
-    return {"art_url": art_url, "year": year}
+    return {"art_url": art_url, "art_url_small": art_url_small, "year": year}
 
 
 def itunes_lookup(title: str, urlopen=urllib.request.urlopen) -> dict:
@@ -146,16 +148,17 @@ def itunes_lookup(title: str, urlopen=urllib.request.urlopen) -> dict:
         with urlopen(url, timeout=10) as resp:
             return parse_itunes_response(resp.read())
     except (OSError, http.client.HTTPException):
-        return {"art_url": None, "year": None}
+        return {"art_url": None, "art_url_small": None, "year": None}
 
 
 def art_cache_paths(title: str):
     key = hashlib.sha1(title.encode()).hexdigest()
-    return cache_dir() / f"{key}.jpg", cache_dir() / f"{key}.json"
+    return (cache_dir() / f"{key}.jpg", cache_dir() / f"{key}-small.jpg",
+            cache_dir() / f"{key}.json")
 
 
 def cached_track_info(title: str):
-    jpg, meta = art_cache_paths(title)
+    jpg, jpg_small, meta = art_cache_paths(title)
     try:
         info = json.loads(meta.read_text())
         if not isinstance(info, dict):
@@ -164,22 +167,30 @@ def cached_track_info(title: str):
         return None
     found = bool(info.get("found")) and jpg.exists()
     return {"year": info.get("year"), "found": found,
-            "jpg": str(jpg) if found else None}
+            "jpg": str(jpg) if found else None,
+            "jpg_small": str(jpg_small) if jpg_small.exists() else None}
 
 
-def store_track_info(title: str, *, year, image_data):
-    jpg, meta = art_cache_paths(title)
+def store_track_info(title: str, *, year, image_data, image_data_small=None):
+    jpg, jpg_small, meta = art_cache_paths(title)
     try:
         meta.parent.mkdir(parents=True, exist_ok=True)
         if image_data:
             jpg.write_bytes(image_data)
+        if image_data_small:
+            jpg_small.write_bytes(image_data_small)
         meta.write_text(json.dumps({"year": year, "found": bool(image_data)}))
     except OSError:
         pass
 
 
 def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
-    """Cache-through art lookup; failed lookups are cached as misses."""
+    """Cache-through art lookup; failed lookups are cached as misses.
+
+    Downloads both the 600x600 (for notifications) and the native 100x100
+    (for the waybar bar) images when available; each download is guarded
+    independently so a failure on one doesn't lose the other.
+    """
     cached = cached_track_info(title)
     if cached is not None:
         return cached
@@ -191,10 +202,19 @@ def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
                 image_data = resp.read()
         except (OSError, http.client.HTTPException):
             image_data = None
-    store_track_info(title, year=info["year"], image_data=image_data)
-    jpg, _ = art_cache_paths(title)
+    image_data_small = None
+    if info["art_url_small"]:
+        try:
+            with urlopen(info["art_url_small"], timeout=10) as resp:
+                image_data_small = resp.read()
+        except (OSError, http.client.HTTPException):
+            image_data_small = None
+    store_track_info(title, year=info["year"], image_data=image_data,
+                     image_data_small=image_data_small)
+    jpg, jpg_small, _ = art_cache_paths(title)
     return {"year": info["year"], "found": bool(image_data),
-            "jpg": str(jpg) if image_data else None}
+            "jpg": str(jpg) if image_data else None,
+            "jpg_small": str(jpg_small) if image_data_small else None}
 
 
 def publish_art(jpg_path, run=subprocess.run):
@@ -264,7 +284,11 @@ class ArtworkWorker:
                 info = self.fetch(title)
                 if self.latest != title:
                     return
-                self.publish(info.get("jpg"))
+                # Publish only the native 100x100 image: waybar 0.15's
+                # image module hangs the whole bar on a 600x600 image.
+                # If the small download failed, publish nothing rather
+                # than risk the freeze.
+                self.publish(info.get("jpg_small"))
                 self.notify(title, station, info.get("year"), info.get("jpg"))
             except Exception:
                 pass

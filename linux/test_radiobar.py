@@ -474,19 +474,22 @@ class TestParseItunesResponse:
             "artworkUrl100": "https://x/img/100x100bb.jpg",
             "releaseDate": "1994-03-01T08:00:00Z"}]}).encode()
         info = rb.parse_itunes_response(data)
-        assert info == {"art_url": "https://x/img/600x600bb.jpg", "year": 1994}
+        assert info == {"art_url": "https://x/img/600x600bb.jpg",
+                        "art_url_small": "https://x/img/100x100bb.jpg",
+                        "year": 1994}
 
     def test_no_results(self):
         assert rb.parse_itunes_response(json.dumps({"results": []}).encode()) \
-            == {"art_url": None, "year": None}
+            == {"art_url": None, "art_url_small": None, "year": None}
 
     def test_garbage(self):
         assert rb.parse_itunes_response(b"{not json") \
-            == {"art_url": None, "year": None}
+            == {"art_url": None, "art_url_small": None, "year": None}
 
     def test_missing_artwork_still_yields_year(self):
         data = json.dumps({"results": [{"releaseDate": "2003-01-01"}]}).encode()
-        assert rb.parse_itunes_response(data) == {"art_url": None, "year": 2003}
+        assert rb.parse_itunes_response(data) == \
+            {"art_url": None, "art_url_small": None, "year": 2003}
 
 
 class _FakeHTTP:
@@ -523,7 +526,8 @@ class TestItunesLookup:
 
     def test_network_error_returns_empty(self):
         fake = _FakeHTTP({"itunes.apple.com": OSError("down")})
-        assert rb.itunes_lookup("x", urlopen=fake) == {"art_url": None, "year": None}
+        assert rb.itunes_lookup("x", urlopen=fake) == \
+            {"art_url": None, "art_url_small": None, "year": None}
 
     def test_incomplete_read_returns_empty(self):
         import http.client
@@ -539,7 +543,8 @@ class TestItunesLookup:
                 raise http.client.IncompleteRead(b"partial")
 
         fake = lambda url, timeout=None: _RaisingResp()
-        assert rb.itunes_lookup("x", urlopen=fake) == {"art_url": None, "year": None}
+        assert rb.itunes_lookup("x", urlopen=fake) == \
+            {"art_url": None, "art_url_small": None, "year": None}
 
 
 class TestArtCache:
@@ -548,20 +553,24 @@ class TestArtCache:
         api = json.dumps({"results": [{
             "artworkUrl100": "https://img.example/100x100bb.jpg",
             "releaseDate": "1990-06-01"}]}).encode()
-        fake = _FakeHTTP({"itunes.apple.com": api, "img.example": b"JPEGDATA"})
+        fake = _FakeHTTP({"itunes.apple.com": api,
+                          "img.example/600x600bb.jpg": b"BIGDATA",
+                          "img.example/100x100bb.jpg": b"SMALLDATA"})
         info = rb.fetch_track_art("A - B", urlopen=fake)
         assert info["found"] and info["year"] == 1990
-        assert Path(info["jpg"]).read_bytes() == b"JPEGDATA"
+        assert Path(info["jpg"]).read_bytes() == b"BIGDATA"
+        assert Path(info["jpg_small"]).read_bytes() == b"SMALLDATA"
 
         fake2 = _FakeHTTP({})  # any network use would raise
         again = rb.fetch_track_art("A - B", urlopen=fake2)
         assert again["found"] and again["year"] == 1990 and fake2.calls == []
+        assert Path(again["jpg_small"]).read_bytes() == b"SMALLDATA"
 
     def test_miss_is_cached(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
         fake = _FakeHTTP({"itunes.apple.com": json.dumps({"results": []}).encode()})
         info = rb.fetch_track_art("Obscure - Track", urlopen=fake)
-        assert info == {"year": None, "found": False, "jpg": None}
+        assert info == {"year": None, "found": False, "jpg": None, "jpg_small": None}
         fake2 = _FakeHTTP({})
         again = rb.fetch_track_art("Obscure - Track", urlopen=fake2)
         assert again["found"] is False and fake2.calls == []
@@ -601,6 +610,7 @@ class TestArtCache:
         info = rb.fetch_track_art("A - B", urlopen=fake)
         assert info["found"] is False
         assert info["jpg"] is None
+        assert info["jpg_small"] is None
 
         # the miss is cached: a second call must not touch the network
         fake2 = _FakeHTTP({})
@@ -609,7 +619,7 @@ class TestArtCache:
 
     def test_non_dict_meta_json_is_treated_as_no_cache(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
-        _, meta = rb.art_cache_paths("Some Title")
+        _, _, meta = rb.art_cache_paths("Some Title")
         meta.parent.mkdir(parents=True, exist_ok=True)
         meta.write_text(json.dumps([1, 2]))
         assert rb.cached_track_info("Some Title") is None
@@ -680,6 +690,13 @@ class TestNotifyTrack:
         assert calls == []
 
 
+class TestArtPath:
+    def test_default_basename_is_jpg(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("RADIOBAR_ART_PATH", raising=False)
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        assert rb.art_path().name == "radiobar-art.jpg"
+
+
 class TestArtworkWorker:
     def _worker(self, fetched, jobs=None):
         events = {"published": [], "notified": []}
@@ -691,19 +708,22 @@ class TestArtworkWorker:
         return w, events
 
     def test_fetches_publishes_notifies(self):
-        w, ev = self._worker({"year": 1990, "found": True, "jpg": "/c.jpg"})
+        w, ev = self._worker({"year": 1990, "found": True, "jpg": "/c.jpg",
+                              "jpg_small": "/c-small.jpg"})
         w.track_changed("A - B", "FIP")
-        assert ev["published"] == ["/c.jpg"]
+        assert ev["published"] == ["/c-small.jpg"]
         assert ev["notified"] == [("A - B", "FIP", 1990, "/c.jpg")]
 
     def test_station_name_title_clears_art(self):
-        w, ev = self._worker({"year": None, "found": False, "jpg": None})
+        w, ev = self._worker({"year": None, "found": False, "jpg": None,
+                              "jpg_small": None})
         w.track_changed("BBC Radio 6 Music", "BBC Radio 6 Music")
         assert ev["published"] == [None] and ev["notified"] == []
 
     def test_dedupes_in_flight(self):
         jobs = []
-        w, ev = self._worker({"year": None, "found": False, "jpg": None}, jobs=jobs)
+        w, ev = self._worker({"year": None, "found": False, "jpg": None,
+                              "jpg_small": None}, jobs=jobs)
         w.track_changed("A - B", "FIP")
         w.track_changed("A - B", "FIP")
         assert len(jobs) == 1
@@ -726,15 +746,18 @@ class TestArtworkWorker:
         assert "A - B" not in w.in_flight
 
     def test_clear_publishes_none(self):
-        w, ev = self._worker({"year": None, "found": False, "jpg": None})
+        w, ev = self._worker({"year": None, "found": False, "jpg": None,
+                              "jpg_small": None})
         w.clear()
         assert ev["published"] == [None]
 
     def test_stale_job_after_newer_track_does_not_publish(self):
         jobs = []
         fetched = {
-            "A - B": {"year": 1990, "found": True, "jpg": "/a.jpg"},
-            "C - D": {"year": 1991, "found": True, "jpg": "/c.jpg"},
+            "A - B": {"year": 1990, "found": True, "jpg": "/a.jpg",
+                      "jpg_small": "/a-small.jpg"},
+            "C - D": {"year": 1991, "found": True, "jpg": "/c.jpg",
+                      "jpg_small": "/c-small.jpg"},
         }
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
@@ -748,7 +771,7 @@ class TestArtworkWorker:
         assert len(jobs) == 2
         jobs[1]()  # B (newer) completes first
         jobs[0]()  # A's stale job completes after
-        assert events["published"] == ["/c.jpg"]
+        assert events["published"] == ["/c-small.jpg"]
         assert events["notified"] == [("C - D", "FIP", 1991, "/c.jpg")]
         assert "A - B" not in w.in_flight
         assert "C - D" not in w.in_flight
@@ -757,7 +780,8 @@ class TestArtworkWorker:
         jobs = []
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg"},
+            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg",
+                                "jpg_small": "/a-small.jpg"},
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=jobs.append)
@@ -776,8 +800,10 @@ class TestArtworkWorker:
         # publishes A's art instead of being suppressed as "stale".
         jobs = []
         fetched = {
-            "A - B": {"year": 1990, "found": True, "jpg": "/a.jpg"},
-            "C - D": {"year": 1991, "found": True, "jpg": "/c.jpg"},
+            "A - B": {"year": 1990, "found": True, "jpg": "/a.jpg",
+                      "jpg_small": "/a-small.jpg"},
+            "C - D": {"year": 1991, "found": True, "jpg": "/c.jpg",
+                      "jpg_small": "/c-small.jpg"},
         }
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
@@ -791,7 +817,7 @@ class TestArtworkWorker:
         w.track_changed("A - B", "FIP")  # A replayed; still in-flight -> deduped
         assert len(jobs) == 2  # no third job spawned
         jobs[0]()  # A's ORIGINAL job runs now; A is current again
-        assert events["published"] == ["/a.jpg"]
+        assert events["published"] == ["/a-small.jpg"]
         assert events["notified"] == [("A - B", "FIP", 1990, "/a.jpg")]
 
     def test_replay_after_clear_publishes_current_track(self):
@@ -800,7 +826,8 @@ class TestArtworkWorker:
         jobs = []
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg"},
+            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg",
+                                "jpg_small": "/a-small.jpg"},
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=jobs.append)
@@ -810,7 +837,7 @@ class TestArtworkWorker:
         w.track_changed("A - B", "FIP")  # A still in-flight -> deduped, re-marked current
         assert len(jobs) == 1  # no second job spawned
         jobs[0]()  # A's original job runs now; A is current again
-        assert events["published"] == [None, "/a.jpg"]
+        assert events["published"] == [None, "/a-small.jpg"]
         assert events["notified"] == [("A - B", "FIP", 1990, "/a.jpg")]
 
 

@@ -11,7 +11,7 @@
 // Optional: album-art thumbnail. Add "image#radioart" to the same modules
 // array, right before "custom/radio":
 "image#radioart": {
-  "path": "/run/user/1000/radiobar-art.png",
+  "path": "/run/user/1000/radiobar-art.jpg",
   "size": 24,
   "signal": 6,
   "tooltip": false

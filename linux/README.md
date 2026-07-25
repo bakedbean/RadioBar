@@ -26,7 +26,7 @@ right before `"custom/radio"`, and paste this block among the module
 definitions (adjust the path to your `$XDG_RUNTIME_DIR`):
 
     "image#radioart": {
-      "path": "/run/user/1000/radiobar-art.png",
+      "path": "/run/user/1000/radiobar-art.jpg",
       "size": 24,
       "signal": 6,
       "tooltip": false
@@ -50,7 +50,7 @@ The module shows `󰐊 Artist – Song` while playing (full title in the tooltip
 
 On every track change, RadioBar also looks up the artist/title on the
 iTunes Search API and, if it finds a match, writes the cover art to
-`$XDG_RUNTIME_DIR/radiobar-art.png` (for the optional `image#radioart`
+`$XDG_RUNTIME_DIR/radiobar-art.jpg` (for the optional `image#radioart`
 waybar module above) and fires a desktop notification with the cover art
 and release year. Lookups (hits and misses) are cached in
 `~/.cache/radiobar/` so repeat plays of the same track don't re-query the
@@ -70,8 +70,10 @@ station name.
 A background worker thread does the artwork/notification lookup so it
 never blocks the waybar status output: on each track change it queries the
 iTunes Search API (caching hits and misses on disk under
-`~/.cache/radiobar/`), writes the cover art to
-`$XDG_RUNTIME_DIR/radiobar-art.png` on a hit, signals waybar
+`~/.cache/radiobar/`), writes the native 100×100 cover art to
+`$XDG_RUNTIME_DIR/radiobar-art.jpg` on a hit (the 600×600 image is kept only
+for the notification — waybar 0.15's `image` module hangs the whole bar on
+a 600×600 image), signals waybar
 (`pkill -RTMIN+6 waybar`) to refresh the `image#radioart` module, and sends
 a notification via `notify-send` (skipped if `RADIOBAR_NO_NOTIFY=1` is
 set). `radiobar stop` clears the art file and re-signals waybar so the

@@ -27,9 +27,14 @@ configurable art sources.
   Per track (key = sha1 of title): `<key>.jpg` plus `<key>.json` sidecar
   `{"year": 1994 | null, "found": true|false}`. Failed lookups cache as misses —
   no retry storm. Cache is unbounded (cover JPEGs are ~50 KB; acceptable).
-- Bar: on art available, copy to `$XDG_RUNTIME_DIR/radiobar-art.png` (override
-  env `RADIOBAR_ART_PATH`) and `pkill -RTMIN+6 waybar`. On no-art or `stop`,
-  remove the file (waybar's image module auto-hides). Art persists while paused.
+- Bar: on art available, copy the native 100×100 iTunes image (not the
+  600×600) to `$XDG_RUNTIME_DIR/radiobar-art.jpg` (override env
+  `RADIOBAR_ART_PATH`) and `pkill -RTMIN+6 waybar`. Root-caused live:
+  waybar 0.15's `image` module hangs the entire bar when given a 600×600
+  image (either JPEG or PNG) — a 128×128 image works fine in both formats —
+  so the 600×600 is fetched and kept only for the notification, never
+  published to the bar. On no-art or `stop`, remove the file (waybar's
+  image module auto-hides). Art persists while paused.
 - Notification: `notify-send -a RadioBar -i <art-or-omitted> "<title>" "<station> · <year>"`
   (year omitted when unknown). Suppressed when `RADIOBAR_NO_NOTIFY=1`.
   A last-notified marker (`$XDG_RUNTIME_DIR/radiobar-last-notify`) prevents a
@@ -48,7 +53,7 @@ configurable art sources.
   `publish_fn` (bar file + signal), `notify_fn`. `StatusTracker`/`watch` call
   `worker.track_changed(title, station)` on icy-title transitions;
   `cmd_stop`/idle path calls `worker.clear()`.
-- Waybar snippet gains `"image#radioart": {"path": "<runtime>/radiobar-art.png", "size": 24, "signal": 6}`;
+- Waybar snippet gains `"image#radioart": {"path": "<runtime>/radiobar-art.jpg", "size": 24, "signal": 6}`;
   add `image#radioart` next to `custom/radio` in modules array. Update
   `linux/README.md` (features, requirements note: mako for notifications) and
   the live machine's waybar config.
