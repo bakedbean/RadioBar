@@ -257,12 +257,16 @@ def fetch_mpris_art(art_url: str, urlopen=urllib.request.urlopen,
     scaler = find_downscaler(which)
     small = None
     if scaler is not None:
+        tmp = jpg_small.with_suffix(".tmp")
         try:
-            result = run(scaler(str(jpg), str(jpg_small)),
-                         capture_output=True)
-            if getattr(result, "returncode", 1) == 0 and jpg_small.exists():
+            result = run(scaler(str(jpg), str(tmp)), capture_output=True)
+            if getattr(result, "returncode", 1) == 0 and tmp.exists():
+                os.replace(tmp, jpg_small)
                 small = str(jpg_small)
+            else:
+                tmp.unlink(missing_ok=True)
         except OSError:
+            tmp.unlink(missing_ok=True)
             small = None
     return {"year": None, "found": True, "jpg": str(jpg),
             "jpg_small": small}

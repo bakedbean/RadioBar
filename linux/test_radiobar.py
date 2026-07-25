@@ -809,6 +809,48 @@ class TestFetchMprisArt:
                                    which=lambda n: None)
         assert again["found"] and fake2.calls == []
 
+    def test_failed_downscale_does_not_poison_cache(self, tmp_path,
+                                                    monkeypatch):
+        # The downscaler writes partial bytes to its destination argv path
+        # but reports failure; a corrupt file at the final jpg_small path
+        # would later be published to waybar's image module unguarded.
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+
+        def run(argv, **kwargs):
+            Path(argv[-1]).write_bytes(b"PARTIAL")
+
+            class R:
+                returncode = 1
+            return R()
+
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=run, which=lambda n: "/usr/bin/" + n)
+        assert info["jpg_small"] is None
+        jpg, jpg_small, _ = rb.art_cache_paths("https://i.scdn.co/image/abc")
+        assert not jpg_small.exists()
+
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_mpris_art("https://i.scdn.co/image/abc",
+                                   urlopen=fake2, run=lambda *a, **k: None,
+                                   which=lambda n: None)
+        assert again["jpg_small"] is None and fake2.calls == []
+
+    def test_downscaler_raises_keeps_full_image_no_small(self, tmp_path,
+                                                          monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+
+        def raising_run(argv, **kwargs):
+            raise OSError("tool vanished")
+
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=raising_run,
+                                  which=lambda n: "/usr/bin/" + n)
+        assert info["jpg_small"] is None
+        assert info["jpg"] is not None
+        assert Path(info["jpg"]).read_bytes() == b"BIGIMG"
+
 
 class TestFetchTrackArtDispatch:
     def test_none_art_url_uses_itunes(self, tmp_path, monkeypatch):
