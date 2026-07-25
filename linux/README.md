@@ -27,7 +27,7 @@ definitions (adjust the path to your `$XDG_RUNTIME_DIR`):
 
     "image#radioart": {
       "path": "/run/user/1000/radiobar-art.jpg",
-      "size": 24,
+      "size": 20,
       "signal": 6,
       "tooltip": false
     }
