@@ -5,9 +5,11 @@ Subcommands: status | toggle | play <name-or-url> | stop | menu
 Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
 """
 import hashlib
+import html
 import http.client
 import json
 import os
+import random
 import shutil
 import socket
 import subprocess
@@ -22,6 +24,26 @@ ICON_PLAY = "\U000f040a"   # 󰐊
 ICON_PAUSE = "\U000f03e4"  # 󰏤
 ICON_IDLE = "\U000f0439"   # 󰐹
 TITLE_LIMIT = 40
+
+SCROLL_WINDOW = 30
+SCROLL_PAD = "   •   "
+PAUSE_TICKS = 10          # 1 s of hold at TICK_SECONDS per step
+TICK_SECONDS = 0.1
+
+COLORS = [
+    "#F5C402", "#f4b8e4", "#99d1db", "#a6d189", "#8caaee",
+    "#e5c890", "#ea999c", "#85c1dc", "#F57627", "#F74105",
+    "#c6a0f6", "#7dc4e4", "#f0c6c6", "#b7bdf8", "#eed49f",
+    "#f5a97f", "#91d7e3", "#cba6f7", "#fab387", "#94e2d5",
+]
+
+PLAYER_ICONS = {
+    "spotify": "\uf1bc",
+    "de.haeckerfelix.shortwave": "\uefbc",
+    "discord": "\uf1ff",
+}
+ICON_MPRIS_DEFAULT = "\U000f075a"
+ICON_MPRIS_PAUSED = "\uf04c"
 
 BUILTIN_STATIONS = [
     {"name": "WERS 88.9 FM",
@@ -322,6 +344,86 @@ def pick_title(icy_title, media_title, station_name) -> str:
         if candidate and not candidate.lower().startswith(("http://", "https://")):
             return candidate
     return station_name
+
+
+def scroll_window(text: str, width: int, offset: int) -> str:
+    padded = text + SCROLL_PAD + text
+    start = offset % (len(text) + len(SCROLL_PAD))
+    return padded[start:start + width]
+
+
+def player_icon(name) -> str:
+    for key, icon in PLAYER_ICONS.items():
+        if key in (name or "").lower():
+            return icon
+    return ICON_MPRIS_DEFAULT
+
+
+def mpris_display_title(active: dict) -> str:
+    if active.get("artist"):
+        return f"{active['artist']} - {active['title']}"
+    return active["title"]
+
+
+class Renderer:
+    """Folds active-source dicts into waybar JSON with scroll + colors.
+
+    Holds scroll offset/hold state and the current track's color pair;
+    render() advances the scroll one step per call while the body
+    overflows SCROLL_WINDOW.
+    """
+
+    def __init__(self, choose=random.choice):
+        self.choose = choose
+        self.key = None
+        self.offset = 0
+        self.pause_ticks = 0
+        self.icon_color = COLORS[0]
+        self.text_color = COLORS[0]
+
+    def render(self, active: dict) -> dict:
+        if active["source"] == "idle":
+            self.key = None
+            return {"text": ICON_IDLE, "tooltip": "RadioBar: off",
+                    "class": "idle"}
+        if active["source"] == "radio":
+            body, subtitle = active["title"], active["station"]
+        else:
+            body = mpris_display_title(active)
+            subtitle = (active["player"] or "").capitalize()
+        key = (active["source"], active["player"], body)
+        if key != self.key:
+            self.key = key
+            self.offset = 0
+            self.pause_ticks = PAUSE_TICKS
+            self.icon_color = self.choose(COLORS)
+            self.text_color = self.choose(COLORS)
+        if len(body) > SCROLL_WINDOW:
+            shown = scroll_window(body, SCROLL_WINDOW, self.offset)
+            if self.pause_ticks > 0:
+                self.pause_ticks -= 1
+            else:
+                self.offset += 1
+                if self.offset >= len(body) + len(SCROLL_PAD):
+                    self.offset = 0
+                    self.pause_ticks = PAUSE_TICKS
+        else:
+            shown = body
+        if active["source"] == "radio":
+            icon = ICON_PLAY if active["playing"] else ICON_PAUSE
+            status = ""
+        else:
+            icon = player_icon(active["player"])
+            status = "" if active["playing"] else f" {ICON_MPRIS_PAUSED}"
+        text = (f"<span foreground='{self.icon_color}'>{icon}</span>{status} "
+                f"<span foreground='{self.text_color}'>"
+                f"{html.escape(shown, quote=False)}</span>")
+        return {"text": text, "tooltip": f"{body}\n{subtitle}",
+                "class": "playing" if active["playing"] else "paused",
+                "markup": "pango"}
+
+    def needs_tick(self) -> bool:
+        return self.key is not None and len(self.key[2]) > SCROLL_WINDOW
 
 
 IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,

@@ -23,6 +23,103 @@ def _load():
 rb = _load()
 
 
+def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify"):
+    return {"source": "mpris", "player": player, "playing": playing,
+            "artist": artist, "title": title, "art_url": None,
+            "station": None}
+
+
+def _radio_active(playing=True, title="A - B", station="FIP"):
+    return {"source": "radio", "player": None, "playing": playing,
+            "artist": None, "title": title, "art_url": None,
+            "station": station}
+
+
+class TestScrollWindow:
+    def test_wraps_with_pad(self):
+        text = "0123456789"  # len 10, window 6
+        assert rb.scroll_window(text, 6, 0) == "012345"
+        # offset 8: chars 8,9 then the pad begins
+        assert rb.scroll_window(text, 6, 8) == "89" + rb.SCROLL_PAD[:4]
+        # offset wraps modulo len(text) + len(pad) = 17
+        assert rb.scroll_window(text, 6, 17) == rb.scroll_window(text, 6, 0)
+
+
+class TestPlayerIcon:
+    def test_known_players(self):
+        assert rb.player_icon("spotify") == rb.PLAYER_ICONS["spotify"]
+        assert rb.player_icon("de.haeckerfelix.shortwave") == \
+            rb.PLAYER_ICONS["de.haeckerfelix.shortwave"]
+
+    def test_substring_match_and_fallback(self):
+        assert rb.player_icon("spotify.instance42") == rb.PLAYER_ICONS["spotify"]
+        assert rb.player_icon("firefox") == rb.ICON_MPRIS_DEFAULT
+        assert rb.player_icon(None) == rb.ICON_MPRIS_DEFAULT
+
+
+class TestRenderer:
+    def _renderer(self):
+        return rb.Renderer(choose=lambda colors: colors[0])
+
+    def test_idle(self):
+        out = self._renderer().render(dict(rb.IDLE_ACTIVE))
+        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
+
+    def test_mpris_playing_has_icons_colors_and_tooltip(self):
+        out = self._renderer().render(_mpris_active())
+        assert out["class"] == "playing" and out["markup"] == "pango"
+        assert rb.PLAYER_ICONS["spotify"] in out["text"]
+        assert rb.COLORS[0] in out["text"]
+        assert "Ar - Ti" in out["text"]
+        assert out["tooltip"] == "Ar - Ti\nSpotify"
+
+    def test_mpris_paused_appends_status_icon(self):
+        out = self._renderer().render(_mpris_active(playing=False))
+        assert out["class"] == "paused"
+        assert rb.ICON_MPRIS_PAUSED in out["text"]
+
+    def test_radio_uses_play_pause_icon_only(self):
+        r = self._renderer()
+        out = r.render(_radio_active(playing=True))
+        assert rb.ICON_PLAY in out["text"] and out["class"] == "playing"
+        assert rb.ICON_MPRIS_PAUSED not in out["text"]
+        out = r.render(_radio_active(playing=False))
+        assert rb.ICON_PAUSE in out["text"] and out["class"] == "paused"
+        assert out["tooltip"] == "A - B\nFIP"
+
+    def test_short_title_no_tick_needed(self):
+        r = self._renderer()
+        r.render(_mpris_active())
+        assert r.needs_tick() is False
+
+    def test_long_title_scrolls_after_pause(self):
+        r = self._renderer()
+        long = _mpris_active(artist=None, title="x" * 40 + "END")
+        r.render(long)
+        assert r.needs_tick() is True
+        # first PAUSE_TICKS renders hold the window at offset 0
+        first = r.render(long)["text"]
+        for _ in range(rb.PAUSE_TICKS - 1):
+            held = r.render(long)["text"]
+        assert held == first
+        moved = r.render(long)["text"]
+        assert moved != first
+
+    def test_track_change_resets_scroll_and_recolors(self):
+        picks = iter(rb.COLORS)
+        r = rb.Renderer(choose=lambda colors: next(picks))
+        a = r.render(_mpris_active(title="x" * 40))
+        b = r.render(_mpris_active(title="y" * 40))  # new track
+        # colors advanced: 2 picks per track with our fake chooser
+        assert rb.COLORS[0] in a["text"] and rb.COLORS[2] in b["text"]
+
+    def test_pango_special_chars_escaped(self):
+        out = self._renderer().render(
+            _mpris_active(artist="Simon & Garfunkel", title="<Sound>"))
+        assert "&amp;" in out["text"] and "&lt;Sound&gt;" in out["text"]
+        assert "Simon & Garfunkel" in out["tooltip"]  # tooltip unescaped
+
+
 class TestLoadStations:
     def test_missing_file_seeds_builtins(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
