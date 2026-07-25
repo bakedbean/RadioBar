@@ -950,6 +950,67 @@ class TestParsePlayerctlLine:
         assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
 
 
+def _radio(playing=True, icy="A - B", station="FIP", seq=1):
+    return {"running": True, "paused": not playing, "icy": icy,
+            "media": None, "station": station, "seq": seq}
+
+
+def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1):
+    return {"status": status, "artist": artist, "title": title,
+            "art_url": art_url, "seq": seq}
+
+
+class TestArbiter:
+    def test_idle_when_nothing(self):
+        active = rb.arbiter({"running": False}, {})
+        assert active["source"] == "idle" and active["playing"] is False
+
+    def test_playing_radio_beats_paused_player(self):
+        active = rb.arbiter(_radio(playing=True, seq=1),
+                            {"spotify": _player("Paused", seq=9)})
+        assert active["source"] == "radio" and active["playing"] is True
+        assert active["title"] == "A - B" and active["station"] == "FIP"
+
+    def test_playing_player_beats_paused_radio(self):
+        active = rb.arbiter(_radio(playing=False, seq=9),
+                            {"spotify": _player("Playing", seq=1)})
+        assert active["source"] == "mpris" and active["player"] == "spotify"
+        assert active["artist"] == "Ar" and active["title"] == "Ti"
+
+    def test_recency_breaks_playing_tie(self):
+        active = rb.arbiter(_radio(playing=True, seq=5),
+                            {"spotify": _player("Playing", seq=7)})
+        assert active["source"] == "mpris"
+        active = rb.arbiter(_radio(playing=True, seq=8),
+                            {"spotify": _player("Playing", seq=7)})
+        assert active["source"] == "radio"
+
+    def test_mpv_player_ignored_while_radio_runs(self):
+        active = rb.arbiter(_radio(playing=True, seq=1),
+                            {"mpv": _player("Playing", seq=9)})
+        assert active["source"] == "radio"
+
+    def test_mpv_player_shown_when_radio_stopped(self):
+        active = rb.arbiter({"running": False},
+                            {"mpv": _player("Playing", title="Some Film")})
+        assert active["source"] == "mpris" and active["player"] == "mpv"
+
+    def test_titleless_player_ignored(self):
+        active = rb.arbiter({"running": False},
+                            {"spotify": _player(title=None)})
+        assert active["source"] == "idle"
+
+    def test_paused_players_recency(self):
+        active = rb.arbiter({"running": False},
+                            {"spotify": _player("Paused", seq=2),
+                             "firefox": _player("Paused", title="V", seq=5)})
+        assert active["player"] == "firefox"
+
+    def test_radio_title_uses_pick_title_fallback(self):
+        active = rb.arbiter(_radio(icy=None), {})
+        assert active["title"] == "FIP"
+
+
 class TestStateStore:
     def test_initial_snapshot_is_idle(self):
         store = rb.StateStore()

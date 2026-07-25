@@ -324,6 +324,43 @@ def pick_title(icy_title, media_title, station_name) -> str:
     return station_name
 
 
+IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,
+               "artist": None, "title": None, "art_url": None,
+               "station": None}
+
+
+def arbiter(radio: dict, players: dict) -> dict:
+    """Pick the active source: Playing beats Paused, then recency (seq)."""
+    candidates = []
+    if radio.get("running"):
+        candidates.append({
+            "source": "radio", "player": None,
+            "playing": not radio.get("paused"),
+            "artist": None,
+            "title": pick_title(radio.get("icy"), radio.get("media"),
+                                radio.get("station", "")),
+            "art_url": None, "station": radio.get("station", ""),
+            "seq": radio.get("seq", 0),
+        })
+    for name, p in players.items():
+        if radio.get("running") and name.startswith("mpv"):
+            continue
+        if not p.get("title"):
+            continue
+        candidates.append({
+            "source": "mpris", "player": name,
+            "playing": p["status"] == "Playing",
+            "artist": p.get("artist"), "title": p["title"],
+            "art_url": p.get("art_url"), "station": None,
+            "seq": p.get("seq", 0),
+        })
+    if not candidates:
+        return dict(IDLE_ACTIVE)
+    best = max(candidates, key=lambda c: (c["playing"], c["seq"]))
+    best.pop("seq")
+    return best
+
+
 PLAYERCTL_FORMAT = ("{{playerName}}\t{{status}}\t{{artist}}\t{{title}}"
                     "\t{{mpris:artUrl}}")
 
