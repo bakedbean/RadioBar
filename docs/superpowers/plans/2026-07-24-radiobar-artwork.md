@@ -4,7 +4,7 @@
 
 **Goal:** Album artwork for the playing track — iTunes lookup (port of macOS ArtworkFetcher), thumbnail in waybar via the image module, mako notification with cover + release year on track change.
 
-**Architecture:** All code lives in `linux/radiobar`. Pure fetch/parse/cache functions + an `ArtworkWorker` (daemon-thread dispatch, injected collaborators) hooked into the existing `watch` loop on title transitions. Publishing = copy jpg to `$XDG_RUNTIME_DIR/radiobar-art.png` + `pkill -RTMIN+8 waybar`; notification via `notify-send`.
+**Architecture:** All code lives in `linux/radiobar`. Pure fetch/parse/cache functions + an `ArtworkWorker` (daemon-thread dispatch, injected collaborators) hooked into the existing `watch` loop on title transitions. Publishing = copy jpg to `$XDG_RUNTIME_DIR/radiobar-art.jpg` + `pkill -RTMIN+6 waybar`; notification via `notify-send`.
 
 **Tech Stack:** Python stdlib (urllib, hashlib, threading), waybar `image` module, mako/notify-send.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Python stdlib only in `linux/radiobar`.
-- Env overrides (tests rely on them): `RADIOBAR_CACHE_DIR` (else `$XDG_CACHE_HOME/radiobar`, else `~/.cache/radiobar`), `RADIOBAR_ART_PATH` (else `$XDG_RUNTIME_DIR/radiobar-art.png`), `RADIOBAR_NO_NOTIFY=1` suppresses notifications.
+- Env overrides (tests rely on them): `RADIOBAR_CACHE_DIR` (else `$XDG_CACHE_HOME/radiobar`, else `~/.cache/radiobar`), `RADIOBAR_ART_PATH` (else `$XDG_RUNTIME_DIR/radiobar-art.jpg`), `RADIOBAR_NO_NOTIFY=1` suppresses notifications.
 - iTunes URL exactly: `https://itunes.apple.com/search?term=<quoted>&entity=song&limit=1`; art URL = `artworkUrl100` with `100x100` → `600x600`; year = leading 4 digits of `releaseDate`.
 - Never raise into the watch loop or delay bar updates: all network on a daemon thread; every thread body and filesystem publish wrapped.
 - Failed lookups are cached as misses (no retries).
@@ -140,7 +140,7 @@ def art_path() -> Path:
     if override:
         return Path(override)
     runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    return Path(runtime) / "radiobar-art.png"
+    return Path(runtime) / "radiobar-art.jpg"
 
 
 def parse_itunes_response(data: bytes) -> dict:
@@ -250,7 +250,7 @@ class TestPublishArt:
         calls = []
         rb.publish_art(str(src), run=lambda cmd, **k: calls.append(cmd))
         assert (tmp_path / "art.png").read_bytes() == b"IMG"
-        assert calls == [["pkill", "-RTMIN+8", "waybar"]]
+        assert calls == [["pkill", "-RTMIN+6", "waybar"]]
 
     def test_none_clears_and_signals(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
@@ -258,7 +258,7 @@ class TestPublishArt:
         calls = []
         rb.publish_art(None, run=lambda cmd, **k: calls.append(cmd))
         assert not (tmp_path / "art.png").exists()
-        assert calls == [["pkill", "-RTMIN+8", "waybar"]]
+        assert calls == [["pkill", "-RTMIN+6", "waybar"]]
 
 
 class TestNotifyTrack:
@@ -404,7 +404,7 @@ def publish_art(jpg_path, run=subprocess.run):
             dest.unlink(missing_ok=True)
     except OSError:
         return
-    run(["pkill", "-RTMIN+8", "waybar"], capture_output=True)
+    run(["pkill", "-RTMIN+6", "waybar"], capture_output=True)
 
 
 def notify_track(title, station, year, art_jpg, run=subprocess.run):
@@ -559,9 +559,9 @@ git commit -m "feat(linux): artwork worker wired into status loop with bar publi
 // Optional: album-art thumbnail. Add "image#radioart" to the same modules
 // array, right before "custom/radio":
 "image#radioart": {
-  "path": "/run/user/1000/radiobar-art.png",
+  "path": "/run/user/1000/radiobar-art.jpg",
   "size": 24,
-  "signal": 8,
+  "signal": 6,
   "tooltip": false
 }
 // (Adjust /run/user/1000 if your UID differs — echo $XDG_RUNTIME_DIR.)
@@ -571,7 +571,7 @@ git commit -m "feat(linux): artwork worker wired into status loop with bar publi
 
 - [ ] **Step 3: Live install** — backup `~/.config/waybar/config.jsonc` (`cp FILE FILE.bak.$(date +%s)`), add `"image#radioart"` to the modules array immediately before `"custom/radio"` and the module block among definitions (use the real `$XDG_RUNTIME_DIR` for the path), `cp linux/radiobar ~/.local/bin/radiobar`, then `omarchy restart waybar`. Expected: waybar restarts clean; no image shown while stopped (file absent).
 
-- [ ] **Step 4: End-to-end verify** — `radiobar play "SomaFM: Groove Salad"`, wait ~10s, then check: `$XDG_RUNTIME_DIR/radiobar-art.png` exists (a real ICY track should resolve on iTunes; if the current track genuinely finds no art, `~/.cache/radiobar/` must contain a miss-marker `.json` instead — either outcome verifies the pipeline); a mako notification fired (check `makoctl history | head` for the track title); `radiobar stop` removes the art file. Run the full suite once more: `python -m pytest linux/test_radiobar.py -q` — all pass. Leave the radio stopped.
+- [ ] **Step 4: End-to-end verify** — `radiobar play "SomaFM: Groove Salad"`, wait ~10s, then check: `$XDG_RUNTIME_DIR/radiobar-art.jpg` exists (a real ICY track should resolve on iTunes; if the current track genuinely finds no art, `~/.cache/radiobar/` must contain a miss-marker `.json` instead — either outcome verifies the pipeline); a mako notification fired (check `makoctl history | head` for the track title); `radiobar stop` removes the art file. Run the full suite once more: `python -m pytest linux/test_radiobar.py -q` — all pass. Leave the radio stopped.
 
 - [ ] **Step 5: Commit and push**
 

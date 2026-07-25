@@ -877,3 +877,43 @@ class TestWatchArtworkHook:
             server.server_close()
         # transition fired once per distinct title, not per event
         assert seen == [("A - B", "FIP"), ("C - D", "FIP")]
+
+
+class TestWriteLastRobustness:
+    def test_unwritable_state_dir_does_not_raise(self, tmp_path, monkeypatch):
+        ro = tmp_path / "ro"
+        ro.mkdir()
+        ro.chmod(0o555)
+        try:
+            monkeypatch.setenv("RADIOBAR_STATE_DIR", str(ro / "radiobar"))
+            rb.write_last("FIP")  # unwritable state dir must not crash toggle/play
+            assert rb.read_last() is None
+        finally:
+            ro.chmod(0o755)
+
+
+class TestCmdMenuNotifyRobustness:
+    def test_missing_notify_send_no_menu_tool_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(rb, "find_menu_cmd", lambda which=None: None)
+
+        def run(cmd, **kwargs):
+            raise FileNotFoundError("notify-send")
+
+        assert rb.cmd_menu(run=run) == 1
+
+    def test_missing_notify_send_unknown_choice_does_not_raise(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        monkeypatch.setattr(rb, "cmd_play", lambda name: 1)
+
+        def run(cmd, **kwargs):
+            if cmd[0] == "notify-send":
+                raise FileNotFoundError("notify-send")
+
+            class R:
+                stdout = "Nope FM\n"
+            return R()
+
+        assert rb.cmd_menu(run=run) == 1
