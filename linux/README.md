@@ -69,7 +69,7 @@ station name.
 
 A background worker thread does the artwork/notification lookup so it
 never blocks the waybar status output: on each track change it queries the
-iTunes Search API (with an in-memory + on-disk cache under
+iTunes Search API (caching hits and misses on disk under
 `~/.cache/radiobar/`), writes the cover art to
 `$XDG_RUNTIME_DIR/radiobar-art.png` on a hit, signals waybar
 (`pkill -RTMIN+6 waybar`) to refresh the `image#radioart` module, and sends

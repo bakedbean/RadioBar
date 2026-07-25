@@ -202,7 +202,9 @@ def publish_art(jpg_path, run=subprocess.run):
     dest = art_path()
     try:
         if jpg_path:
-            dest.write_bytes(Path(jpg_path).read_bytes())
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_bytes(Path(jpg_path).read_bytes())
+            os.replace(tmp, dest)
         else:
             dest.unlink(missing_ok=True)
     except OSError:
@@ -226,7 +228,7 @@ def notify_track(title, station, year, art_jpg, run=subprocess.run):
     cmd = ["notify-send", "-a", "RadioBar"]
     if art_jpg:
         cmd += ["-i", art_jpg]
-    cmd += [title, body]
+    cmd += ["--", title, body]
     run(cmd, capture_output=True)
     try:
         marker.write_text(title)
@@ -243,25 +245,24 @@ class ArtworkWorker:
         self.fetch = fetch_fn
         self.publish = publish_fn
         self.notify = notify_fn
-        self.gen = 0
+        self.latest = None
         self.spawn = spawn or (lambda fn: threading.Thread(
             target=fn, daemon=True).start())
 
     def track_changed(self, title, station):
         if not title or title == station:
-            self.gen += 1
+            self.latest = None
             self.publish(None)
             return
+        self.latest = title
         if title in self.in_flight:
             return
-        self.gen += 1
-        my_gen = self.gen
         self.in_flight.add(title)
 
         def job():
             try:
                 info = self.fetch(title)
-                if self.gen != my_gen:
+                if self.latest != title:
                     return
                 self.publish(info.get("jpg"))
                 self.notify(title, station, info.get("year"), info.get("jpg"))
@@ -273,7 +274,7 @@ class ArtworkWorker:
         self.spawn(job)
 
     def clear(self):
-        self.gen += 1
+        self.latest = None
         self.publish(None)
 
 

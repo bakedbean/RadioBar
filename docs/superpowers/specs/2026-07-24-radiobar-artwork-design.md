@@ -28,7 +28,7 @@ configurable art sources.
   `{"year": 1994 | null, "found": true|false}`. Failed lookups cache as misses —
   no retry storm. Cache is unbounded (cover JPEGs are ~50 KB; acceptable).
 - Bar: on art available, copy to `$XDG_RUNTIME_DIR/radiobar-art.png` (override
-  env `RADIOBAR_ART_PATH`) and `pkill -RTMIN+8 waybar`. On no-art or `stop`,
+  env `RADIOBAR_ART_PATH`) and `pkill -RTMIN+6 waybar`. On no-art or `stop`,
   remove the file (waybar's image module auto-hides). Art persists while paused.
 - Notification: `notify-send -a RadioBar -i <art-or-omitted> "<title>" "<station> · <year>"`
   (year omitted when unknown). Suppressed when `RADIOBAR_NO_NOTIFY=1`.
@@ -48,15 +48,16 @@ configurable art sources.
   `publish_fn` (bar file + signal), `notify_fn`. `StatusTracker`/`watch` call
   `worker.track_changed(title, station)` on icy-title transitions;
   `cmd_stop`/idle path calls `worker.clear()`.
-- Waybar snippet gains `"image#radioart": {"path": "<runtime>/radiobar-art.png", "size": 24, "signal": 8}`;
+- Waybar snippet gains `"image#radioart": {"path": "<runtime>/radiobar-art.png", "size": 24, "signal": 6}`;
   add `image#radioart` next to `custom/radio` in modules array. Update
   `linux/README.md` (features, requirements note: mako for notifications) and
   the live machine's waybar config.
 
 ## Error handling
 
-- Network/API/JSON failures → cached miss, no notification, bar art cleared;
-  never raises into the watch loop (thread body wraps everything).
+- Network/API/JSON failures → cached miss, art cleared; the track-change
+  notification still fires (title/station, no cover); never raises into the
+  watch loop (thread body wraps everything).
 - `pkill`/`notify-send` absent or failing → ignored (bar text is unaffected).
 
 ## Testing

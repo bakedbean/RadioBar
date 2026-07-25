@@ -650,7 +650,7 @@ class TestNotifyTrack:
         rb.notify_track("A - B", "FIP", 1994, "/tmp/c.jpg",
                         run=lambda cmd, **k: calls.append(cmd))
         assert calls == [["notify-send", "-a", "RadioBar", "-i", "/tmp/c.jpg",
-                          "A - B", "FIP · 1994"]]
+                          "--", "A - B", "FIP · 1994"]]
 
     def test_no_year_no_art(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
@@ -658,7 +658,7 @@ class TestNotifyTrack:
         calls = []
         rb.notify_track("A - B", "FIP", None, None,
                         run=lambda cmd, **k: calls.append(cmd))
-        assert calls == [["notify-send", "-a", "RadioBar", "A - B", "FIP"]]
+        assert calls == [["notify-send", "-a", "RadioBar", "--", "A - B", "FIP"]]
 
     def test_marker_suppresses_duplicate(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
@@ -768,6 +768,50 @@ class TestArtworkWorker:
         assert events["published"] == [None]
         assert events["notified"] == []
         assert "A - B" not in w.in_flight
+
+    def test_a_b_a_replay_publishes_current_track(self):
+        # A -> B -> A: the third call (A again) must be deduped (A's
+        # original job is still in-flight) but must re-mark A as the
+        # *current* title, so when A's original job finally completes it
+        # publishes A's art instead of being suppressed as "stale".
+        jobs = []
+        fetched = {
+            "A - B": {"year": 1990, "found": True, "jpg": "/a.jpg"},
+            "C - D": {"year": 1991, "found": True, "jpg": "/c.jpg"},
+        }
+        events = {"published": [], "notified": []}
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t: fetched[t],
+            publish_fn=lambda jpg: events["published"].append(jpg),
+            notify_fn=lambda *a: events["notified"].append(a),
+            spawn=jobs.append)
+        w.track_changed("A - B", "FIP")  # job A queued, A in-flight
+        w.track_changed("C - D", "FIP")  # job B queued, C-D in-flight
+        assert len(jobs) == 2
+        w.track_changed("A - B", "FIP")  # A replayed; still in-flight -> deduped
+        assert len(jobs) == 2  # no third job spawned
+        jobs[0]()  # A's ORIGINAL job runs now; A is current again
+        assert events["published"] == ["/a.jpg"]
+        assert events["notified"] == [("A - B", "FIP", 1990, "/a.jpg")]
+
+    def test_replay_after_clear_publishes_current_track(self):
+        # clear() then replaying the same title (still in-flight from
+        # before the clear) must not permanently suppress that title's art.
+        jobs = []
+        events = {"published": [], "notified": []}
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg"},
+            publish_fn=lambda jpg: events["published"].append(jpg),
+            notify_fn=lambda *a: events["notified"].append(a),
+            spawn=jobs.append)
+        w.track_changed("A - B", "FIP")  # job queued, A in-flight
+        assert len(jobs) == 1
+        w.clear()  # publishes None
+        w.track_changed("A - B", "FIP")  # A still in-flight -> deduped, re-marked current
+        assert len(jobs) == 1  # no second job spawned
+        jobs[0]()  # A's original job runs now; A is current again
+        assert events["published"] == [None, "/a.jpg"]
+        assert events["notified"] == [("A - B", "FIP", 1990, "/a.jpg")]
 
 
 class TestWatchArtworkHook:
