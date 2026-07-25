@@ -94,7 +94,7 @@ class TestRenderer:
 
     def test_long_title_scrolls_after_pause(self):
         r = self._renderer()
-        long = _mpris_active(artist=None, title="x" * 40 + "END")
+        long = _mpris_active(artist=None, title="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef")
         r.render(long)
         assert r.needs_tick() is True
         # first PAUSE_TICKS renders hold the window at offset 0
