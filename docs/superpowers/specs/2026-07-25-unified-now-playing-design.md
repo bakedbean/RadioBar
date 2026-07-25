@@ -20,13 +20,32 @@ layout.
 
 ## Source priority (arbiter)
 
-Given radio state (from mpv IPC) and the set of MPRIS players (from playerctl):
+The bar always shows what's audible. Given radio state (from mpv IPC) and the
+set of MPRIS players (from playerctl), radio is just another source:
 
-1. Radio running (playing **or** paused) → radio wins. You started it
-   explicitly; pausing it must not flip the slot to another source.
-2. Otherwise, MPRIS players with status `Playing` beat `Paused`; among equals,
-   the player whose state changed most recently wins.
-3. No radio, no players → idle (`󰐹`, click starts last station).
+1. `Playing` beats `Paused`, across all sources. Among equals, the source
+   whose state changed most recently wins (monotonic sequence number, no
+   wall-clock).
+2. No radio, no players → idle (`󰐹`, click starts last station).
+
+Two sources both `Playing` is transient — the guard below resolves it — so
+the recency tie-break only matters for the moment it takes to fire.
+
+## One-audible-source guard
+
+RadioBar enforces "at most one audible source, last-started wins":
+
+- **MPRIS player starts while radio is playing** → the status process pauses
+  its own mpv (IPC `set pause true`). The bar flips to the MPRIS player; the
+  station sits paused, resumable via hotkey/menu. The guard is edge-triggered
+  (fires on a player's transition to `Playing`, not on level state), so it
+  can't fight with a user resuming radio.
+- **Radio starts/resumes while an MPRIS player is playing** → `cmd_toggle`
+  and `cmd_play` run `playerctl -a pause` (idempotent) before starting or
+  unpausing mpv. These are short-lived commands, so no coordination with the
+  status process is needed.
+
+RadioBar never *stops* another app, only pauses it.
 
 While RadioBar's own mpv is running, MPRIS players whose name starts with
 `mpv` are ignored, so an installed mpv-mpris plugin can't make the radio
@@ -117,8 +136,13 @@ active source changes. New subcommands read it and dispatch:
   (existing `cmd_toggle` fallback path).
 - `radiobar prev` / `radiobar next` — mpris → `playerctl -p <player>`
   previous/next; radio or idle → no-op.
-- Existing `toggle`, `play`, `stop`, `menu` subcommands unchanged — the
-  SUPER+SHIFT+R hotkey (`radiobar toggle`) keeps its exact behavior.
+- `toggle` and `play` gain the `playerctl -a pause` guard (above) but keep
+  their interface — the SUPER+SHIFT+R hotkey (`radiobar toggle`) still
+  starts/resumes/pauses radio exactly as today. `stop` unchanged.
+- `menu` gains a `■ Stop radio` entry at the top of the station list whenever
+  radio is running (mpv socket connectable); selecting it runs the `stop`
+  path. This keeps a fully-stopped radio one right-click away even when the
+  bar is showing an MPRIS source.
 
 Waybar bindings: `on-click: radiobar click`,
 `on-click-middle: radiobar prev`, `on-click-right: radiobar menu`.
@@ -132,6 +156,9 @@ as the station menu.)
   players dict.
 - `arbiter(radio_state, players) -> Active(source, player, status, artist,
   title, art_ref)` — pure.
+- `guard_action(prev_players, players, radio_state) -> "pause_radio"|None` —
+  pure edge-transition detector; the render loop executes its verdict via
+  mpv IPC.
 - `class Renderer` — scroll offset/pause state machine + color pairs + icon
   maps; `render(active, tick) -> waybar dict` pure given its state.
 - `ArtWorker` — gains `art_url` path (download/copy + downscale) beside the
@@ -149,8 +176,9 @@ follow-up, not part of this change.
 
 `linux/test_radiobar.py` style — pure functions, injected I/O, no threads:
 playerctl line parsing (incl. malformed/cleared lines), arbiter priorities
-(radio-paused beats playing-Spotify, playing beats paused, recency tie-break,
-mpv-ignore rule), scroll windowing (short text, wrap seam, pause counter),
+(playing beats paused across sources, recency tie-break, mpv-ignore rule),
+guard transitions (MPRIS starts while radio plays → pause_radio; no fire on
+level state, on radio-only, or on ignored mpv players), scroll windowing (short text, wrap seam, pause counter),
 renderer JSON shape and class field, art path selection
 (https/file/no-downscaler skip), click/prev/next dispatch against a fake
 active file and runner, active-file round-trip.
