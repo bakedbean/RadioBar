@@ -324,6 +324,29 @@ def pick_title(icy_title, media_title, station_name) -> str:
     return station_name
 
 
+PLAYERCTL_FORMAT = ("{{playerName}}\t{{status}}\t{{artist}}\t{{title}}"
+                    "\t{{mpris:artUrl}}")
+
+
+def parse_playerctl_line(line: str):
+    """One playerctl --follow line -> (player, state) | (player, None) | None.
+
+    (player, None) means the player vanished or stopped and must be dropped.
+    None means the line is unusable and should be skipped entirely.
+    """
+    line = line.rstrip("\n")
+    if not line.strip():
+        return None
+    parts = line.split("\t")
+    if len(parts) != 5 or not parts[0]:
+        return None
+    name, status, artist, title, art_url = parts
+    if status not in ("Playing", "Paused"):
+        return (name, None)
+    return (name, {"status": status, "artist": artist or None,
+                   "title": title or None, "art_url": art_url or None})
+
+
 def waybar_output(*, running: bool, paused: bool = False, icy_title=None,
                   media_title=None, station_name: str = "") -> dict:
     if not running:

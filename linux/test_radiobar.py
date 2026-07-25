@@ -917,3 +917,34 @@ class TestCmdMenuNotifyRobustness:
             return R()
 
         assert rb.cmd_menu(run=run) == 1
+
+
+class TestParsePlayerctlLine:
+    def test_playing_line(self):
+        line = "spotify\tPlaying\tAir\tLa Femme d'Argent\thttps://i.scdn.co/image/x\n"
+        name, state = rb.parse_playerctl_line(line)
+        assert name == "spotify"
+        assert state == {"status": "Playing", "artist": "Air",
+                         "title": "La Femme d'Argent",
+                         "art_url": "https://i.scdn.co/image/x"}
+
+    def test_empty_fields_become_none(self):
+        name, state = rb.parse_playerctl_line("firefox\tPaused\t\tSome Video\t\n")
+        assert name == "firefox"
+        assert state == {"status": "Paused", "artist": None,
+                         "title": "Some Video", "art_url": None}
+
+    def test_blank_line_is_ignored(self):
+        assert rb.parse_playerctl_line("\n") is None
+        assert rb.parse_playerctl_line("   \n") is None
+
+    def test_wrong_field_count_is_ignored(self):
+        assert rb.parse_playerctl_line("garbage line\n") is None
+        assert rb.parse_playerctl_line("a\tb\tc\n") is None
+
+    def test_stopped_or_cleared_status_drops_player(self):
+        assert rb.parse_playerctl_line("spotify\tStopped\t\t\t\n") == ("spotify", None)
+        assert rb.parse_playerctl_line("spotify\t\t\t\t\n") == ("spotify", None)
+
+    def test_empty_player_name_is_ignored(self):
+        assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
