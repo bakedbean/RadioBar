@@ -75,8 +75,12 @@ def stations_path() -> Path:
 def load_stations() -> list:
     path = stations_path()
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(BUILTIN_STATIONS, indent=2) + "\n")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(BUILTIN_STATIONS, indent=2) + "\n")
+        except OSError as exc:
+            print(f"radiobar: can't seed stations.json ({exc}), "
+                  "using built-ins", file=sys.stderr)
         return list(BUILTIN_STATIONS)
     try:
         data = json.loads(path.read_text())
@@ -189,7 +193,7 @@ def ipc_command(args: list):
                         continue
                     if "error" in resp:
                         return resp
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError):
         return None
 
 
@@ -269,7 +273,10 @@ def cmd_menu(run=subprocess.run) -> int:
     choice = result.stdout.strip()
     if not choice:
         return 0
-    return cmd_play(choice)
+    rc = cmd_play(choice)
+    if rc != 0:
+        run(["notify-send", "RadioBar", f"Unknown station: {choice}"])
+    return rc
 
 
 def cmd_stop() -> int:

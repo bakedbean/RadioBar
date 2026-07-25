@@ -48,6 +48,18 @@ class TestLoadStations:
         (tmp_path / "stations.json").write_text(json.dumps({"nope": 1}))
         assert rb.load_stations() == rb.BUILTIN_STATIONS
 
+    def test_unwritable_config_dir_falls_back_to_builtins(
+            self, tmp_path, monkeypatch):
+        readonly_parent = tmp_path / "readonly"
+        readonly_parent.mkdir()
+        readonly_parent.chmod(0o555)
+        try:
+            monkeypatch.setenv("RADIOBAR_CONFIG_DIR",
+                                str(readonly_parent / "radiobar"))
+            assert rb.load_stations() == rb.BUILTIN_STATIONS
+        finally:
+            readonly_parent.chmod(0o755)
+
 
 class TestFindStation:
     def test_exact_name(self):
@@ -442,3 +454,14 @@ class TestCmdMenu:
             return run(cmd, **kwargs)
         assert rb.cmd_menu(run=run_capture) == 1
         assert notified and notified[0][0] == "notify-send"
+
+    def test_unknown_choice_notifies_and_returns_error(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "cmd_play", lambda name: 1)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, calls = self._fake_run("Nope FM\n")
+        assert rb.cmd_menu(run=run) == 1
+        assert any(c[0][0] == "notify-send" for c in calls)
+        notify_call = next(c for c in calls if c[0][0] == "notify-send")
+        assert "Nope FM" in notify_call[0][2]

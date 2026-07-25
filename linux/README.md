@@ -41,7 +41,7 @@ The module shows `󰐊 Artist – Song` while playing (full title in the tooltip
 
 mpv plays the stream and parses ICY (Shoutcast/Icecast) metadata natively.
 `radiobar status` subscribes to mpv's JSON IPC socket
-(`$XDG_RUNTIME_DIR/radiobar.sock`), observes `icy-title`/`pause`, and prints a
+(`$XDG_RUNTIME_DIR/radiobar.sock`), observes `icy-title`/`media-title`/`pause`, and prints a
 waybar JSON line on every change — so track changes hit the bar within a
 second. Streams without ICY metadata (e.g. BBC's HLS) fall back to the
 station name.

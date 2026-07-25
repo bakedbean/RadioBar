@@ -35,7 +35,7 @@ right-click ────────────────▶ radiobar menu �
 mpv is launched as:
 
 ```
-mpv --no-video --idle=no \
+mpv --no-video \
     --input-ipc-server=$XDG_RUNTIME_DIR/radiobar.sock \
     --stream-lavf-o=reconnect_streamed=1,reconnect_delay_max=10 \
     <streamURL>
