@@ -960,6 +960,31 @@ def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1):
             "art_url": art_url, "seq": seq}
 
 
+class TestGuardAction:
+    def test_new_playing_player_while_radio_plays_fires(self):
+        assert rb.guard_action({}, {"spotify": _player("Playing")}, True) is True
+
+    def test_transition_paused_to_playing_fires(self):
+        assert rb.guard_action({"spotify": _player("Paused")},
+                               {"spotify": _player("Playing")}, True) is True
+
+    def test_level_state_does_not_fire(self):
+        # already Playing in prev — no edge, no fire (can't fight a user
+        # who resumes radio while spotify is left playing)
+        assert rb.guard_action({"spotify": _player("Playing")},
+                               {"spotify": _player("Playing")}, True) is False
+
+    def test_radio_not_playing_never_fires(self):
+        assert rb.guard_action({}, {"spotify": _player("Playing")}, False) is False
+
+    def test_mpv_player_never_fires(self):
+        # radio's own mpv seen through mpv-mpris must not pause radio
+        assert rb.guard_action({}, {"mpv": _player("Playing")}, True) is False
+
+    def test_paused_player_does_not_fire(self):
+        assert rb.guard_action({}, {"spotify": _player("Paused")}, True) is False
+
+
 class TestArbiter:
     def test_idle_when_nothing(self):
         active = rb.arbiter({"running": False}, {})

@@ -329,6 +329,22 @@ IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,
                "station": None}
 
 
+def guard_action(prev_players: dict, players: dict,
+                 radio_playing: bool) -> bool:
+    """Edge-triggered: did some player just start playing over the radio?"""
+    if not radio_playing:
+        return False
+    for name, p in players.items():
+        if name.startswith("mpv"):
+            continue
+        if p.get("status") != "Playing":
+            continue
+        prev = prev_players.get(name)
+        if prev is None or prev.get("status") != "Playing":
+            return True
+    return False
+
+
 def arbiter(radio: dict, players: dict) -> dict:
     """Pick the active source: Playing beats Paused, then recency (seq)."""
     candidates = []
