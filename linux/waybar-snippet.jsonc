@@ -9,10 +9,11 @@
 }
 
 // Optional: album-art thumbnail. Add "image#radioart" to the same modules
-// array, right before "custom/radio":
+// array, right before "custom/radio". Keep "size" a few px under the bar
+// "height" so the art doesn't touch the bar edges:
 "image#radioart": {
   "path": "/run/user/1000/radiobar-art.jpg",
-  "size": 24,
+  "size": 20,
   "signal": 6,
   "tooltip": false
 }
