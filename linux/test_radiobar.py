@@ -948,3 +948,50 @@ class TestParsePlayerctlLine:
 
     def test_empty_player_name_is_ignored(self):
         assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
+
+
+class TestStateStore:
+    def test_initial_snapshot_is_idle(self):
+        store = rb.StateStore()
+        radio, players = store.snapshot()
+        assert radio == {"running": False} and players == {}
+
+    def test_set_radio_stamps_increasing_seq_and_sets_event(self):
+        store = rb.StateStore()
+        store.set_radio({"running": True, "paused": False, "icy": None,
+                         "media": None, "station": "FIP"})
+        assert store.changed.is_set()
+        radio1, _ = store.snapshot()
+        store.set_radio({"running": True, "paused": True, "icy": None,
+                         "media": None, "station": "FIP"})
+        radio2, _ = store.snapshot()
+        assert radio2["seq"] > radio1["seq"]
+
+    def test_update_and_drop_player(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Playing", "artist": "A",
+                                        "title": "T", "art_url": None})
+        _, players = store.snapshot()
+        assert players["spotify"]["status"] == "Playing"
+        assert "seq" in players["spotify"]
+        store.update_player("spotify", None)
+        _, players = store.snapshot()
+        assert players == {}
+
+    def test_player_seq_advances_across_updates(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Paused", "artist": None,
+                                        "title": "T", "art_url": None})
+        store.update_player("firefox", {"status": "Playing", "artist": None,
+                                        "title": "V", "art_url": None})
+        _, players = store.snapshot()
+        assert players["firefox"]["seq"] > players["spotify"]["seq"]
+
+    def test_snapshot_is_a_copy(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Playing", "artist": None,
+                                        "title": "T", "art_url": None})
+        _, players = store.snapshot()
+        players["spotify"]["status"] = "Paused"
+        _, players2 = store.snapshot()
+        assert players2["spotify"]["status"] == "Playing"

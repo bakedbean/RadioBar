@@ -347,6 +347,46 @@ def parse_playerctl_line(line: str):
                    "title": title or None, "art_url": art_url or None})
 
 
+class StateStore:
+    """Thread-safe holder for radio + MPRIS player state.
+
+    Watcher threads mutate it; the render loop reads snapshots. Every
+    mutation stamps a monotonic seq (recency for the arbiter tie-break —
+    deliberately not wall-clock) and sets `changed`.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.changed = threading.Event()
+        self._radio = {"running": False}
+        self._players = {}
+        self._seq = 0
+
+    def set_radio(self, state: dict):
+        with self._lock:
+            self._seq += 1
+            s = dict(state)
+            s["seq"] = self._seq
+            self._radio = s
+        self.changed.set()
+
+    def update_player(self, name: str, state):
+        with self._lock:
+            if state is None:
+                self._players.pop(name, None)
+            else:
+                self._seq += 1
+                s = dict(state)
+                s["seq"] = self._seq
+                self._players[name] = s
+        self.changed.set()
+
+    def snapshot(self):
+        with self._lock:
+            return (dict(self._radio),
+                    {k: dict(v) for k, v in self._players.items()})
+
+
 def waybar_output(*, running: bool, paused: bool = False, icy_title=None,
                   media_title=None, station_name: str = "") -> dict:
     if not running:
