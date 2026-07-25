@@ -207,7 +207,10 @@ def publish_art(jpg_path, run=subprocess.run):
             dest.unlink(missing_ok=True)
     except OSError:
         return
-    run(["pkill", "-RTMIN+8", "waybar"], capture_output=True)
+    try:
+        run(["pkill", "-RTMIN+8", "waybar"], capture_output=True)
+    except OSError:
+        pass
 
 
 def notify_track(title, station, year, art_jpg, run=subprocess.run):
@@ -240,10 +243,13 @@ class ArtworkWorker:
         self.fetch = fetch_fn
         self.publish = publish_fn
         self.notify = notify_fn
+        self.gen = 0
         self.spawn = spawn or (lambda fn: threading.Thread(
             target=fn, daemon=True).start())
 
     def track_changed(self, title, station):
+        self.gen += 1
+        my_gen = self.gen
         if not title or title == station:
             self.publish(None)
             return
@@ -254,6 +260,8 @@ class ArtworkWorker:
         def job():
             try:
                 info = self.fetch(title)
+                if self.gen != my_gen:
+                    return
                 self.publish(info.get("jpg"))
                 self.notify(title, station, info.get("year"), info.get("jpg"))
             except Exception:
@@ -264,6 +272,7 @@ class ArtworkWorker:
         self.spawn(job)
 
     def clear(self):
+        self.gen += 1
         self.publish(None)
 
 

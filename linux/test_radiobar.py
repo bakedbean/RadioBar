@@ -633,6 +633,14 @@ class TestPublishArt:
         assert not (tmp_path / "art.png").exists()
         assert calls == [["pkill", "-RTMIN+8", "waybar"]]
 
+    def test_missing_pkill_binary_does_not_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+
+        def raising_fn(cmd, **k):
+            raise FileNotFoundError("pkill not found")
+
+        rb.publish_art(None, run=raising_fn)  # must not raise
+
 
 class TestNotifyTrack:
     def test_notifies_with_art_and_year(self, tmp_path, monkeypatch):
@@ -717,6 +725,45 @@ class TestArtworkWorker:
         w, ev = self._worker({"year": None, "found": False, "jpg": None})
         w.clear()
         assert ev["published"] == [None]
+
+    def test_stale_job_after_newer_track_does_not_publish(self):
+        jobs = []
+        fetched = {
+            "A - B": {"year": 1990, "found": True, "jpg": "/a.jpg"},
+            "C - D": {"year": 1991, "found": True, "jpg": "/c.jpg"},
+        }
+        events = {"published": [], "notified": []}
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t: fetched[t],
+            publish_fn=lambda jpg: events["published"].append(jpg),
+            notify_fn=lambda *a: events["notified"].append(a),
+            spawn=jobs.append)
+        w.track_changed("A - B", "FIP")  # gen 1, job A queued
+        assert len(jobs) == 1
+        w.track_changed("C - D", "FIP")  # gen 2, job B queued
+        assert len(jobs) == 2
+        jobs[1]()  # B (newer) completes first
+        jobs[0]()  # A's stale job completes after
+        assert events["published"] == ["/c.jpg"]
+        assert events["notified"] == [("C - D", "FIP", 1991, "/c.jpg")]
+        assert "A - B" not in w.in_flight
+        assert "C - D" not in w.in_flight
+
+    def test_stale_job_after_clear_does_not_publish(self):
+        jobs = []
+        events = {"published": [], "notified": []}
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg"},
+            publish_fn=lambda jpg: events["published"].append(jpg),
+            notify_fn=lambda *a: events["notified"].append(a),
+            spawn=jobs.append)
+        w.track_changed("A - B", "FIP")  # gen 1, job queued
+        assert len(jobs) == 1
+        w.clear()  # gen 2, publishes None
+        jobs[0]()  # stale job completes after clear
+        assert events["published"] == [None]
+        assert events["notified"] == []
+        assert "A - B" not in w.in_flight
 
 
 class TestWatchArtworkHook:
