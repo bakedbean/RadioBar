@@ -7,3 +7,13 @@
   "on-click-right": "radiobar menu",
   "tooltip": true
 }
+
+// Optional: album-art thumbnail. Add "image#radioart" to the same modules
+// array, right before "custom/radio":
+"image#radioart": {
+  "path": "/run/user/1000/radiobar-art.png",
+  "size": 24,
+  "signal": 8,
+  "tooltip": false
+}
+// (Adjust /run/user/1000 if your UID differs — echo $XDG_RUNTIME_DIR.)
