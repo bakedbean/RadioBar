@@ -1241,3 +1241,83 @@ class TestStateStore:
         players["spotify"]["status"] = "Paused"
         _, players2 = store.snapshot()
         assert players2["spotify"]["status"] == "Playing"
+
+
+class TestActiveFile:
+    def test_roundtrip_only_source_and_player(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH",
+                           str(tmp_path / "active.json"))
+        rb.write_active({"source": "mpris", "player": "spotify",
+                         "playing": True, "title": "T"})
+        assert rb.read_active() == {"source": "mpris", "player": "spotify"}
+
+    def test_missing_file_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH",
+                           str(tmp_path / "absent.json"))
+        assert rb.read_active() is None
+
+    def test_corrupt_file_returns_none(self, tmp_path, monkeypatch):
+        p = tmp_path / "active.json"
+        p.write_text("{nope")
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH", str(p))
+        assert rb.read_active() is None
+
+
+class TestClickDispatch:
+    def _set_active(self, tmp_path, monkeypatch, source, player=None):
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH",
+                           str(tmp_path / "active.json"))
+        if source is not None:
+            rb.write_active({"source": source, "player": player})
+
+    def test_mpris_active_click_play_pauses_that_player(
+            self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "mpris", "spotify")
+        calls = []
+        assert rb.cmd_click(run=lambda cmd, **k: calls.append(cmd)) == 0
+        assert calls == [["playerctl", "-p", "spotify", "play-pause"]]
+
+    def test_radio_active_click_falls_through_to_toggle(
+            self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "radio")
+        toggled = []
+        monkeypatch.setattr(rb, "cmd_toggle",
+                            lambda run=None: toggled.append(1) or 0)
+        assert rb.cmd_click(run=lambda cmd, **k: None) == 0
+        assert toggled == [1]
+
+    def test_idle_or_missing_click_falls_through_to_toggle(
+            self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, None)
+        toggled = []
+        monkeypatch.setattr(rb, "cmd_toggle",
+                            lambda run=None: toggled.append(1) or 0)
+        assert rb.cmd_click(run=lambda cmd, **k: None) == 0
+        assert toggled == [1]
+
+    def test_prev_next_only_act_on_mpris(self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "mpris", "spotify")
+        calls = []
+        assert rb.cmd_prev(run=lambda cmd, **k: calls.append(cmd)) == 0
+        assert rb.cmd_next(run=lambda cmd, **k: calls.append(cmd)) == 0
+        assert calls == [["playerctl", "-p", "spotify", "previous"],
+                         ["playerctl", "-p", "spotify", "next"]]
+        self._set_active(tmp_path, monkeypatch, "radio")
+        calls2 = []
+        assert rb.cmd_prev(run=lambda cmd, **k: calls2.append(cmd)) == 0
+        assert calls2 == []
+
+    def test_missing_playerctl_returns_error(self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "mpris", "spotify")
+
+        def run(cmd, **k):
+            raise FileNotFoundError("playerctl")
+        assert rb.cmd_click(run=run) == 1
+
+
+class TestMainDispatchNewCommands:
+    def test_click_prev_next_dispatch(self, monkeypatch):
+        for name, fn in (("click", "cmd_click"), ("prev", "cmd_prev"),
+                         ("next", "cmd_next")):
+            monkeypatch.setattr(rb, fn, lambda run=None: 0)
+            assert rb.main([name]) == 0

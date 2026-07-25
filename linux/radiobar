@@ -150,6 +150,33 @@ def art_path() -> Path:
     return Path(runtime) / "radiobar-art.jpg"
 
 
+def active_path() -> Path:
+    override = os.environ.get("RADIOBAR_ACTIVE_PATH")
+    if override:
+        return Path(override)
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return Path(runtime) / "radiobar-active.json"
+
+
+def write_active(active: dict):
+    dest = active_path()
+    try:
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"source": active.get("source"),
+                                   "player": active.get("player")}))
+        os.replace(tmp, dest)
+    except OSError:
+        pass
+
+
+def read_active():
+    try:
+        data = json.loads(active_path().read_text())
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def parse_itunes_response(data: bytes) -> dict:
     """iTunes Search API payload -> {"art_url", "art_url_small", "year"}
     (all may be None)."""
@@ -764,6 +791,34 @@ def cmd_stop() -> int:
     return 0
 
 
+def _mpris_control(action: str, run) -> int:
+    active = read_active()
+    if not (active and active.get("source") == "mpris"
+            and active.get("player")):
+        return 0
+    try:
+        run(["playerctl", "-p", active["player"], action],
+            capture_output=True)
+    except OSError:
+        return 1
+    return 0
+
+
+def cmd_click(run=subprocess.run) -> int:
+    active = read_active()
+    if active and active.get("source") == "mpris" and active.get("player"):
+        return _mpris_control("play-pause", run)
+    return cmd_toggle()
+
+
+def cmd_prev(run=subprocess.run) -> int:
+    return _mpris_control("previous", run)
+
+
+def cmd_next(run=subprocess.run) -> int:
+    return _mpris_control("next", run)
+
+
 def emit(d: dict):
     print(json.dumps(d, separators=(",", ":")), flush=True)
 
@@ -836,7 +891,7 @@ def cmd_status() -> int:
         time.sleep(2)
 
 
-USAGE = "usage: radiobar status|toggle|play <name-or-url>|stop|menu"
+USAGE = "usage: radiobar status|toggle|play <name-or-url>|stop|menu|click|prev|next"
 
 
 def main(argv) -> int:
@@ -857,6 +912,12 @@ def main(argv) -> int:
         return cmd_stop()
     if cmd == "menu":
         return cmd_menu()
+    if cmd == "click":
+        return cmd_click()
+    if cmd == "prev":
+        return cmd_prev()
+    if cmd == "next":
+        return cmd_next()
     print(USAGE, file=sys.stderr)
     return 2
 
