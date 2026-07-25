@@ -172,16 +172,6 @@ class TestFindStation:
         assert rb.find_station(rb.BUILTIN_STATIONS, "Nope FM") is None
 
 
-class TestTruncate:
-    def test_short_unchanged(self):
-        assert rb.truncate("abc") == "abc"
-
-    def test_long_gets_ellipsis_within_limit(self):
-        out = rb.truncate("x" * 60)
-        assert len(out) == rb.TITLE_LIMIT
-        assert out.endswith("…")
-
-
 class TestPickTitle:
     def test_icy_wins(self):
         assert rb.pick_title("A - B", "media", "St") == "A - B"
@@ -197,69 +187,41 @@ class TestPickTitle:
         assert rb.pick_title("  ", "", "St") == "St"
 
 
-class TestWaybarOutput:
-    def test_idle(self):
-        out = rb.waybar_output(running=False)
-        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
-
-    def test_paused_shows_station(self):
-        out = rb.waybar_output(running=True, paused=True, station_name="FIP")
-        assert out["class"] == "paused"
-        assert out["text"] == f"{rb.ICON_PAUSE} FIP"
-
-    def test_playing_shows_title_and_tooltip(self):
-        out = rb.waybar_output(running=True, icy_title="Artist - Song",
-                               station_name="KEXP 90.3 FM")
-        assert out["class"] == "playing"
-        assert out["text"] == f"{rb.ICON_PLAY} Artist - Song"
-        assert "Artist - Song" in out["tooltip"]
-        assert "KEXP 90.3 FM" in out["tooltip"]
-
-    def test_playing_long_title_truncated_in_text_not_tooltip(self):
-        long_title = "The Extraordinarily Long Band Name - An Even Longer Song Title"
-        out = rb.waybar_output(running=True, icy_title=long_title,
-                               station_name="NTS Radio 1")
-        assert len(out["text"]) <= len(rb.ICON_PLAY) + 1 + rb.TITLE_LIMIT
-        assert long_title in out["tooltip"]
-
-
 class TestStatusTracker:
-    def test_initial_output_is_playing_station_name(self):
+    def test_initial_state(self):
         t = rb.StatusTracker("FIP")
-        out = t.output()
-        assert out["class"] == "playing" and "FIP" in out["text"]
+        assert t.state() == {"running": True, "paused": False, "icy": None,
+                             "media": None, "station": "FIP"}
 
-    def test_icy_title_event_updates_text(self):
+    def test_icy_title_event_updates_state(self):
         t = rb.StatusTracker("FIP")
         out = t.handle_event({"event": "property-change",
                               "name": "metadata/by-key/icy-title",
                               "data": "Air - La Femme d'Argent"})
-        assert out is not None
-        assert "Air - La Femme d'Argent" in out["text"]
+        assert out["icy"] == "Air - La Femme d'Argent"
 
     def test_pause_event_switches_state(self):
         t = rb.StatusTracker("FIP")
-        t.handle_event({"event": "property-change",
-                        "name": "metadata/by-key/icy-title", "data": "A - B"})
         out = t.handle_event({"event": "property-change",
                               "name": "pause", "data": True})
-        assert out["class"] == "paused"
+        assert out["paused"] is True
         out = t.handle_event({"event": "property-change",
                               "name": "pause", "data": False})
-        assert out["class"] == "playing" and "A - B" in out["text"]
+        assert out["paused"] is False
 
     def test_irrelevant_events_return_none(self):
         t = rb.StatusTracker("FIP")
         assert t.handle_event({"event": "playback-restart"}) is None
         assert t.handle_event({"request_id": 1, "error": "success"}) is None
 
-    def test_null_icy_data_falls_back(self):
+    def test_null_icy_data_clears(self):
         t = rb.StatusTracker("FIP")
         t.handle_event({"event": "property-change",
                         "name": "metadata/by-key/icy-title", "data": "A - B"})
         out = t.handle_event({"event": "property-change",
-                              "name": "metadata/by-key/icy-title", "data": None})
-        assert "FIP" in out["text"]
+                              "name": "metadata/by-key/icy-title",
+                              "data": None})
+        assert out["icy"] is None
 
 
 class TestLastStation:
@@ -439,12 +401,11 @@ class TestEmit:
 
 
 class TestWatch:
-    def test_observes_props_emits_updates_and_raises_on_close(
-            self, tmp_path, monkeypatch, capsys):
+    def test_observes_props_feeds_store_and_raises_on_close(
+            self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
         rb.write_last("FIP")
         sock_path = tmp_path / "radiobar.sock"
-
         received = []
 
         class Handler(socketserver.StreamRequestHandler):
@@ -454,28 +415,26 @@ class TestWatch:
                 ev = {"event": "property-change",
                       "name": "metadata/by-key/icy-title", "data": "A - B"}
                 self.wfile.write(json.dumps(ev).encode() + b"\n")
-                # then close the connection → watch must raise OSError
 
         server = socketserver.UnixStreamServer(str(sock_path), Handler)
         thread = threading.Thread(target=server.handle_request, daemon=True)
         thread.start()
-
         import socket as socket_mod
         client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
         client.connect(str(sock_path))
+        store = rb.StateStore()
         try:
             import pytest
             with pytest.raises(OSError):
-                rb.watch(client)
+                rb.watch(client, store)
         finally:
             client.close()
             thread.join(timeout=5)
             server.server_close()
-
         assert [r["command"][2] for r in received] == rb.OBSERVED_PROPS
-        lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
-        # initial state, then the icy-title update
-        assert any("A - B" in l["text"] for l in lines)
+        radio, _ = store.snapshot()
+        assert radio["running"] and radio["icy"] == "A - B"
+        assert radio["station"] == "FIP"
 
 
 class TestMainDispatch:
@@ -1078,44 +1037,6 @@ class TestArtworkWorker:
         jobs[0]()  # A's original job runs now; A is current again
         assert events["published"] == [None, "/a-small.jpg"]
         assert events["notified"] == [("A - B", "FIP", 1990, "/a.jpg")]
-
-
-class TestWatchArtworkHook:
-    def test_title_transition_calls_worker(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
-        rb.write_last("FIP")
-        seen = []
-
-        class W:
-            def track_changed(self, title, subtitle, art_url=None):
-                seen.append((title, subtitle))
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self):
-                for _ in rb.OBSERVED_PROPS:
-                    self.rfile.readline()
-                for title in ("A - B", "A - B", "C - D"):
-                    ev = {"event": "property-change",
-                          "name": "metadata/by-key/icy-title", "data": title}
-                    self.wfile.write(json.dumps(ev).encode() + b"\n")
-
-        sock_path = tmp_path / "radiobar.sock"
-        server = socketserver.UnixStreamServer(str(sock_path), Handler)
-        thread = threading.Thread(target=server.handle_request, daemon=True)
-        thread.start()
-        import socket as socket_mod
-        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
-        client.connect(str(sock_path))
-        try:
-            import pytest
-            with pytest.raises(OSError):
-                rb.watch(client, worker=W())
-        finally:
-            client.close()
-            thread.join(timeout=5)
-            server.server_close()
-        # transition fired once per distinct title, not per event
-        assert seen == [("A - B", "FIP"), ("C - D", "FIP")]
 
 
 class TestWriteLastRobustness:
