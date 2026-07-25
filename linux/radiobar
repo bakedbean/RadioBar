@@ -248,13 +248,14 @@ class ArtworkWorker:
             target=fn, daemon=True).start())
 
     def track_changed(self, title, station):
-        self.gen += 1
-        my_gen = self.gen
         if not title or title == station:
+            self.gen += 1
             self.publish(None)
             return
         if title in self.in_flight:
             return
+        self.gen += 1
+        my_gen = self.gen
         self.in_flight.add(title)
 
         def job():

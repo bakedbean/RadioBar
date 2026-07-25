@@ -708,6 +708,10 @@ class TestArtworkWorker:
         w.track_changed("A - B", "FIP")
         assert len(jobs) == 1
         jobs[0]()  # completing the job releases the dedupe slot
+        # The deduped second call must not have bumped gen and orphaned the
+        # first (still in-flight) job's publish — its completion should
+        # still fire normally.
+        assert ev["published"] == [None]
         w.track_changed("A - B", "FIP")
         assert len(jobs) == 2
 
