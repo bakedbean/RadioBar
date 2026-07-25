@@ -59,6 +59,11 @@ make build
 open build/RadioBar.app
 ```
 
+## Linux (waybar/Hyprland)
+
+RadioBar also runs on Linux as a waybar module driven by mpv — same station
+list, same live track info in the bar. See [linux/README.md](linux/README.md).
+
 ## How It Works
 
 Internet radio streams (Shoutcast/Icecast) embed song metadata inside the audio bytes using the ICY protocol. AVPlayer can play the audio but hides the raw bytes.

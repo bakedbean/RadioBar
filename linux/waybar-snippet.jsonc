@@ -1,0 +1,19 @@
+// Add "custom/radio" to one of the modules arrays in ~/.config/waybar/config.jsonc
+// (e.g. "modules-right"), then paste this block among the module definitions:
+"custom/radio": {
+  "exec": "radiobar status",
+  "return-type": "json",
+  "on-click": "radiobar toggle",
+  "on-click-right": "radiobar menu",
+  "tooltip": true
+}
+
+// Optional: album-art thumbnail. Add "image#radioart" to the same modules
+// array, right before "custom/radio":
+"image#radioart": {
+  "path": "/run/user/1000/radiobar-art.jpg",
+  "size": 24,
+  "signal": 6,
+  "tooltip": false
+}
+// (Adjust /run/user/1000 if your UID differs — echo $XDG_RUNTIME_DIR.)
