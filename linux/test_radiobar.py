@@ -613,3 +613,145 @@ class TestArtCache:
         meta.parent.mkdir(parents=True, exist_ok=True)
         meta.write_text(json.dumps([1, 2]))
         assert rb.cached_track_info("Some Title") is None
+
+
+class TestPublishArt:
+    def test_copies_and_signals(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+        src = tmp_path / "cover.jpg"
+        src.write_bytes(b"IMG")
+        calls = []
+        rb.publish_art(str(src), run=lambda cmd, **k: calls.append(cmd))
+        assert (tmp_path / "art.png").read_bytes() == b"IMG"
+        assert calls == [["pkill", "-RTMIN+8", "waybar"]]
+
+    def test_none_clears_and_signals(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+        (tmp_path / "art.png").write_bytes(b"OLD")
+        calls = []
+        rb.publish_art(None, run=lambda cmd, **k: calls.append(cmd))
+        assert not (tmp_path / "art.png").exists()
+        assert calls == [["pkill", "-RTMIN+8", "waybar"]]
+
+
+class TestNotifyTrack:
+    def test_notifies_with_art_and_year(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+        monkeypatch.delenv("RADIOBAR_NO_NOTIFY", raising=False)
+        calls = []
+        rb.notify_track("A - B", "FIP", 1994, "/tmp/c.jpg",
+                        run=lambda cmd, **k: calls.append(cmd))
+        assert calls == [["notify-send", "-a", "RadioBar", "-i", "/tmp/c.jpg",
+                          "A - B", "FIP · 1994"]]
+
+    def test_no_year_no_art(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+        monkeypatch.delenv("RADIOBAR_NO_NOTIFY", raising=False)
+        calls = []
+        rb.notify_track("A - B", "FIP", None, None,
+                        run=lambda cmd, **k: calls.append(cmd))
+        assert calls == [["notify-send", "-a", "RadioBar", "A - B", "FIP"]]
+
+    def test_marker_suppresses_duplicate(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+        monkeypatch.delenv("RADIOBAR_NO_NOTIFY", raising=False)
+        calls = []
+        run = lambda cmd, **k: calls.append(cmd)
+        rb.notify_track("A - B", "FIP", None, None, run=run)
+        rb.notify_track("A - B", "FIP", None, None, run=run)
+        assert len(calls) == 1
+        rb.notify_track("C - D", "FIP", None, None, run=run)
+        assert len(calls) == 2
+
+    def test_env_suppresses(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
+        monkeypatch.setenv("RADIOBAR_NO_NOTIFY", "1")
+        calls = []
+        rb.notify_track("A - B", "FIP", 2000, None,
+                        run=lambda cmd, **k: calls.append(cmd))
+        assert calls == []
+
+
+class TestArtworkWorker:
+    def _worker(self, fetched, jobs=None):
+        events = {"published": [], "notified": []}
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t: fetched,
+            publish_fn=lambda jpg: events["published"].append(jpg),
+            notify_fn=lambda *a: events["notified"].append(a),
+            spawn=(jobs.append if jobs is not None else (lambda fn: fn())))
+        return w, events
+
+    def test_fetches_publishes_notifies(self):
+        w, ev = self._worker({"year": 1990, "found": True, "jpg": "/c.jpg"})
+        w.track_changed("A - B", "FIP")
+        assert ev["published"] == ["/c.jpg"]
+        assert ev["notified"] == [("A - B", "FIP", 1990, "/c.jpg")]
+
+    def test_station_name_title_clears_art(self):
+        w, ev = self._worker({"year": None, "found": False, "jpg": None})
+        w.track_changed("BBC Radio 6 Music", "BBC Radio 6 Music")
+        assert ev["published"] == [None] and ev["notified"] == []
+
+    def test_dedupes_in_flight(self):
+        jobs = []
+        w, ev = self._worker({"year": None, "found": False, "jpg": None}, jobs=jobs)
+        w.track_changed("A - B", "FIP")
+        w.track_changed("A - B", "FIP")
+        assert len(jobs) == 1
+        jobs[0]()  # completing the job releases the dedupe slot
+        w.track_changed("A - B", "FIP")
+        assert len(jobs) == 2
+
+    def test_fetch_exception_swallowed_and_slot_released(self):
+        jobs = []
+        w = rb.ArtworkWorker(fetch_fn=lambda t: (_ for _ in ()).throw(RuntimeError()),
+                             publish_fn=lambda jpg: None,
+                             notify_fn=lambda *a: None,
+                             spawn=jobs.append)
+        w.track_changed("A - B", "FIP")
+        jobs[0]()  # must not raise
+        assert "A - B" not in w.in_flight
+
+    def test_clear_publishes_none(self):
+        w, ev = self._worker({"year": None, "found": False, "jpg": None})
+        w.clear()
+        assert ev["published"] == [None]
+
+
+class TestWatchArtworkHook:
+    def test_title_transition_calls_worker(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        rb.write_last("FIP")
+        seen = []
+
+        class W:
+            def track_changed(self, title, station):
+                seen.append((title, station))
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self):
+                for _ in rb.OBSERVED_PROPS:
+                    self.rfile.readline()
+                for title in ("A - B", "A - B", "C - D"):
+                    ev = {"event": "property-change",
+                          "name": "metadata/by-key/icy-title", "data": title}
+                    self.wfile.write(json.dumps(ev).encode() + b"\n")
+
+        sock_path = tmp_path / "radiobar.sock"
+        server = socketserver.UnixStreamServer(str(sock_path), Handler)
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        import socket as socket_mod
+        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        client.connect(str(sock_path))
+        try:
+            import pytest
+            with pytest.raises(OSError):
+                rb.watch(client, worker=W())
+        finally:
+            client.close()
+            thread.join(timeout=5)
+            server.server_close()
+        # transition fired once per distinct title, not per event
+        assert seen == [("A - B", "FIP"), ("C - D", "FIP")]

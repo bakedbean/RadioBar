@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -196,6 +197,76 @@ def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
             "jpg": str(jpg) if image_data else None}
 
 
+def publish_art(jpg_path, run=subprocess.run):
+    """Copy cover art to the waybar image module's path (None clears it)."""
+    dest = art_path()
+    try:
+        if jpg_path:
+            dest.write_bytes(Path(jpg_path).read_bytes())
+        else:
+            dest.unlink(missing_ok=True)
+    except OSError:
+        return
+    run(["pkill", "-RTMIN+8", "waybar"], capture_output=True)
+
+
+def notify_track(title, station, year, art_jpg, run=subprocess.run):
+    if os.environ.get("RADIOBAR_NO_NOTIFY") == "1":
+        return
+    marker = art_path().with_name("radiobar-last-notify")
+    try:
+        if marker.read_text() == title:
+            return
+    except OSError:
+        pass
+    body = station if year is None else f"{station} · {year}"
+    cmd = ["notify-send", "-a", "RadioBar"]
+    if art_jpg:
+        cmd += ["-i", art_jpg]
+    cmd += [title, body]
+    run(cmd, capture_output=True)
+    try:
+        marker.write_text(title)
+    except OSError:
+        pass
+
+
+class ArtworkWorker:
+    """Fetches art off-thread on track changes; publishes to bar + notifies."""
+
+    def __init__(self, fetch_fn=fetch_track_art, publish_fn=publish_art,
+                 notify_fn=notify_track, spawn=None):
+        self.in_flight = set()
+        self.fetch = fetch_fn
+        self.publish = publish_fn
+        self.notify = notify_fn
+        self.spawn = spawn or (lambda fn: threading.Thread(
+            target=fn, daemon=True).start())
+
+    def track_changed(self, title, station):
+        if not title or title == station:
+            self.publish(None)
+            return
+        if title in self.in_flight:
+            return
+        self.in_flight.add(title)
+
+        def job():
+            try:
+                info = self.fetch(title)
+                self.publish(info.get("jpg"))
+                self.notify(title, station, info.get("year"), info.get("jpg"))
+            except Exception:
+                pass
+            finally:
+                self.in_flight.discard(title)
+
+        self.spawn(job)
+
+    def clear(self):
+        self.publish(None)
+
+
 def truncate(s: str, limit: int = TITLE_LIMIT) -> str:
     if len(s) <= limit:
         return s
@@ -375,6 +446,7 @@ def cmd_menu(run=subprocess.run) -> int:
 
 def cmd_stop() -> int:
     ipc_command(["quit"])
+    publish_art(None)
     return 0
 
 
@@ -382,13 +454,14 @@ def emit(d: dict):
     print(json.dumps(d, separators=(",", ":")), flush=True)
 
 
-def watch(sock):
+def watch(sock, worker=None):
     """Observe mpv properties on an open socket; emit bar updates until it closes."""
     tracker = StatusTracker(read_last() or "")
     for i, prop in enumerate(OBSERVED_PROPS, start=1):
         sock.sendall(json.dumps({"command": ["observe_property", i, prop]})
                      .encode() + b"\n")
     emit(tracker.output())
+    last_track = None
     buf = b""
     while True:
         chunk = sock.recv(4096)
@@ -404,9 +477,16 @@ def watch(sock):
             out = tracker.handle_event(ev)
             if out is not None:
                 emit(out)
+                if worker is not None:
+                    current = pick_title(tracker.icy, tracker.media,
+                                         tracker.station)
+                    if current != last_track:
+                        last_track = current
+                        worker.track_changed(current, tracker.station)
 
 
 def cmd_status() -> int:
+    worker = ArtworkWorker()
     while True:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -417,11 +497,12 @@ def cmd_status() -> int:
             time.sleep(2)
             continue
         try:
-            watch(s)
+            watch(s, worker=worker)
         except OSError:
             pass
         finally:
             s.close()
+        worker.clear()
         emit(waybar_output(running=False))
         time.sleep(2)
 
