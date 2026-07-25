@@ -7,6 +7,7 @@ import socketserver
 import sys
 import threading
 import time
+from pathlib import Path
 
 
 def _load():
@@ -465,3 +466,86 @@ class TestCmdMenu:
         assert any(c[0][0] == "notify-send" for c in calls)
         notify_call = next(c for c in calls if c[0][0] == "notify-send")
         assert "Nope FM" in notify_call[0][2]
+
+
+class TestParseItunesResponse:
+    def test_full_result(self):
+        data = json.dumps({"results": [{
+            "artworkUrl100": "https://x/img/100x100bb.jpg",
+            "releaseDate": "1994-03-01T08:00:00Z"}]}).encode()
+        info = rb.parse_itunes_response(data)
+        assert info == {"art_url": "https://x/img/600x600bb.jpg", "year": 1994}
+
+    def test_no_results(self):
+        assert rb.parse_itunes_response(json.dumps({"results": []}).encode()) \
+            == {"art_url": None, "year": None}
+
+    def test_garbage(self):
+        assert rb.parse_itunes_response(b"{not json") \
+            == {"art_url": None, "year": None}
+
+    def test_missing_artwork_still_yields_year(self):
+        data = json.dumps({"results": [{"releaseDate": "2003-01-01"}]}).encode()
+        assert rb.parse_itunes_response(data) == {"art_url": None, "year": 2003}
+
+
+class _FakeHTTP:
+    """Callable standing in for urllib.request.urlopen."""
+    def __init__(self, responses):
+        self.responses = responses  # url-substring -> bytes (or OSError)
+        self.calls = []
+
+    def __call__(self, url, timeout=None):
+        self.calls.append(url)
+        for frag, payload in self.responses.items():
+            if frag in url:
+                if isinstance(payload, Exception):
+                    raise payload
+                import io
+
+                class R(io.BytesIO):
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+                return R(payload)
+        raise OSError("no fake for " + url)
+
+
+class TestItunesLookup:
+    def test_builds_query_url(self):
+        fake = _FakeHTTP({"itunes.apple.com": json.dumps({"results": []}).encode()})
+        rb.itunes_lookup("Air - Ce Matin-Là", urlopen=fake)
+        assert fake.calls[0].startswith(
+            "https://itunes.apple.com/search?term=Air%20-%20Ce%20Matin-L")
+        assert fake.calls[0].endswith("&entity=song&limit=1")
+
+    def test_network_error_returns_empty(self):
+        fake = _FakeHTTP({"itunes.apple.com": OSError("down")})
+        assert rb.itunes_lookup("x", urlopen=fake) == {"art_url": None, "year": None}
+
+
+class TestArtCache:
+    def test_fetch_stores_and_second_call_skips_network(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        api = json.dumps({"results": [{
+            "artworkUrl100": "https://img.example/100x100bb.jpg",
+            "releaseDate": "1990-06-01"}]}).encode()
+        fake = _FakeHTTP({"itunes.apple.com": api, "img.example": b"JPEGDATA"})
+        info = rb.fetch_track_art("A - B", urlopen=fake)
+        assert info["found"] and info["year"] == 1990
+        assert Path(info["jpg"]).read_bytes() == b"JPEGDATA"
+
+        fake2 = _FakeHTTP({})  # any network use would raise
+        again = rb.fetch_track_art("A - B", urlopen=fake2)
+        assert again["found"] and again["year"] == 1990 and fake2.calls == []
+
+    def test_miss_is_cached(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"itunes.apple.com": json.dumps({"results": []}).encode()})
+        info = rb.fetch_track_art("Obscure - Track", urlopen=fake)
+        assert info == {"year": None, "found": False, "jpg": None}
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_track_art("Obscure - Track", urlopen=fake2)
+        assert again["found"] is False and fake2.calls == []

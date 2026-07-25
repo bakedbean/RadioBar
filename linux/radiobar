@@ -4,6 +4,7 @@
 Subcommands: status | toggle | play <name-or-url> | stop | menu
 Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ICON_PLAY = "\U000f040a"   # 󰐊
@@ -100,6 +103,94 @@ def find_station(stations: list, name: str):
         if s["name"].lower() == name.lower():
             return s
     return None
+
+
+def cache_dir() -> Path:
+    override = os.environ.get("RADIOBAR_CACHE_DIR")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    return Path(base) / "radiobar"
+
+
+def art_path() -> Path:
+    override = os.environ.get("RADIOBAR_ART_PATH")
+    if override:
+        return Path(override)
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return Path(runtime) / "radiobar-art.png"
+
+
+def parse_itunes_response(data: bytes) -> dict:
+    """iTunes Search API payload -> {"art_url", "year"} (both may be None)."""
+    empty = {"art_url": None, "year": None}
+    try:
+        first = json.loads(data)["results"][0]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return empty
+    year = None
+    release = first.get("releaseDate")
+    if isinstance(release, str) and release[:4].isdigit():
+        year = int(release[:4])
+    art = first.get("artworkUrl100")
+    art_url = art.replace("100x100", "600x600") if isinstance(art, str) else None
+    return {"art_url": art_url, "year": year}
+
+
+def itunes_lookup(title: str, urlopen=urllib.request.urlopen) -> dict:
+    url = ("https://itunes.apple.com/search?term="
+           + urllib.parse.quote(title) + "&entity=song&limit=1")
+    try:
+        with urlopen(url, timeout=10) as resp:
+            return parse_itunes_response(resp.read())
+    except OSError:
+        return {"art_url": None, "year": None}
+
+
+def art_cache_paths(title: str):
+    key = hashlib.sha1(title.encode()).hexdigest()
+    return cache_dir() / f"{key}.jpg", cache_dir() / f"{key}.json"
+
+
+def cached_track_info(title: str):
+    jpg, meta = art_cache_paths(title)
+    try:
+        info = json.loads(meta.read_text())
+    except (OSError, ValueError):
+        return None
+    found = bool(info.get("found")) and jpg.exists()
+    return {"year": info.get("year"), "found": found,
+            "jpg": str(jpg) if found else None}
+
+
+def store_track_info(title: str, *, year, image_data):
+    jpg, meta = art_cache_paths(title)
+    try:
+        meta.parent.mkdir(parents=True, exist_ok=True)
+        if image_data:
+            jpg.write_bytes(image_data)
+        meta.write_text(json.dumps({"year": year, "found": bool(image_data)}))
+    except OSError:
+        pass
+
+
+def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
+    """Cache-through art lookup; failed lookups are cached as misses."""
+    cached = cached_track_info(title)
+    if cached is not None:
+        return cached
+    info = itunes_lookup(title, urlopen)
+    image_data = None
+    if info["art_url"]:
+        try:
+            with urlopen(info["art_url"], timeout=10) as resp:
+                image_data = resp.read()
+        except OSError:
+            image_data = None
+    store_track_info(title, year=info["year"], image_data=image_data)
+    jpg, _ = art_cache_paths(title)
+    return {"year": info["year"], "found": bool(image_data),
+            "jpg": str(jpg) if image_data else None}
 
 
 def truncate(s: str, limit: int = TITLE_LIMIT) -> str:
