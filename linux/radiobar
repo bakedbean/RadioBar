@@ -212,13 +212,75 @@ def store_track_info(title: str, *, year, image_data, image_data_small=None):
         pass
 
 
-def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
+def find_downscaler(which=shutil.which):
+    """Return an argv builder producing a <=128px copy, or None."""
+    if which("magick"):
+        return lambda src, dst: ["magick", src, "-resize", "128x128>", dst]
+    if which("convert"):
+        return lambda src, dst: ["convert", src, "-resize", "128x128>", dst]
+    if which("ffmpeg"):
+        return lambda src, dst: ["ffmpeg", "-y", "-loglevel", "error",
+                                 "-i", src, "-vf", "scale=min(128\\,iw):-2",
+                                 dst]
+    return None
+
+
+def fetch_mpris_art(art_url: str, urlopen=urllib.request.urlopen,
+                    run=subprocess.run, which=shutil.which) -> dict:
+    """Fetch MPRIS artUrl into the shared cache (keyed by URL).
+
+    jpg_small is produced only via an external downscaler — waybar 0.15's
+    image module hangs the bar on large images, so with no downscaler the
+    bar art is skipped and only the notification gets the full image.
+    """
+    cached = cached_track_info(art_url)
+    if cached is not None:
+        return cached
+    data = None
+    if art_url.startswith(("http://", "https://")):
+        try:
+            with urlopen(art_url, timeout=10) as resp:
+                data = resp.read()
+        except (OSError, http.client.HTTPException):
+            data = None
+    elif art_url.startswith("file://"):
+        try:
+            path = urllib.parse.unquote(urllib.parse.urlparse(art_url).path)
+            data = Path(path).read_bytes()
+        except (OSError, ValueError):
+            data = None
+    if not data:
+        store_track_info(art_url, year=None, image_data=None)
+        return {"year": None, "found": False, "jpg": None, "jpg_small": None}
+    store_track_info(art_url, year=None, image_data=data)
+    jpg, jpg_small, _ = art_cache_paths(art_url)
+    scaler = find_downscaler(which)
+    small = None
+    if scaler is not None:
+        try:
+            result = run(scaler(str(jpg), str(jpg_small)),
+                         capture_output=True)
+            if getattr(result, "returncode", 1) == 0 and jpg_small.exists():
+                small = str(jpg_small)
+        except OSError:
+            small = None
+    return {"year": None, "found": True, "jpg": str(jpg),
+            "jpg_small": small}
+
+
+def fetch_track_art(title: str, art_url=None,
+                    urlopen=urllib.request.urlopen) -> dict:
     """Cache-through art lookup; failed lookups are cached as misses.
 
     Downloads both the 600x600 (for notifications) and the native 100x100
     (for the waybar bar) images when available; each download is guarded
     independently so a failure on one doesn't lose the other.
+
+    art_url is None -> existing iTunes lookup keyed by title; a string ->
+    delegate to fetch_mpris_art (MPRIS-reported artUrl), keyed by URL.
     """
+    if art_url is not None:
+        return fetch_mpris_art(art_url, urlopen)
     cached = cached_track_info(title)
     if cached is not None:
         return cached
@@ -297,8 +359,8 @@ class ArtworkWorker:
         self.spawn = spawn or (lambda fn: threading.Thread(
             target=fn, daemon=True).start())
 
-    def track_changed(self, title, station):
-        if not title or title == station:
+    def track_changed(self, title, subtitle, art_url=None):
+        if not title or title == subtitle:
             self.latest = None
             self.publish(None)
             return
@@ -309,7 +371,7 @@ class ArtworkWorker:
 
         def job():
             try:
-                info = self.fetch(title)
+                info = self.fetch(title, art_url)
                 if self.latest != title:
                     return
                 # Publish only the native 100x100 image: waybar 0.15's
@@ -317,7 +379,7 @@ class ArtworkWorker:
                 # If the small download failed, publish nothing rather
                 # than risk the freeze.
                 self.publish(info.get("jpg_small"))
-                self.notify(title, station, info.get("year"), info.get("jpg"))
+                self.notify(title, subtitle, info.get("year"), info.get("jpg"))
             except Exception:
                 pass
             finally:

@@ -7,6 +7,7 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 
@@ -722,6 +723,103 @@ class TestArtCache:
         assert rb.cached_track_info("Some Title") is None
 
 
+class TestFindDownscaler:
+    def test_prefers_magick_then_convert_then_ffmpeg(self):
+        which = lambda n: "/usr/bin/" + n
+        assert rb.find_downscaler(which)("in.jpg", "out.jpg")[0] == "magick"
+        which = lambda n: None if n == "magick" else "/usr/bin/" + n
+        assert rb.find_downscaler(which)("in.jpg", "out.jpg")[0] == "convert"
+        which = lambda n: "/usr/bin/ffmpeg" if n == "ffmpeg" else None
+        argv = rb.find_downscaler(which)("in.jpg", "out.jpg")
+        assert argv[0] == "ffmpeg" and "out.jpg" in argv
+
+    def test_none_when_no_tool(self):
+        assert rb.find_downscaler(lambda n: None) is None
+
+
+class TestFetchMprisArt:
+    def _run_ok(self, calls):
+        def run(argv, **kwargs):
+            calls.append(argv)
+            Path(argv[-1]).write_bytes(b"SMALL")
+
+            class R:
+                returncode = 0
+            return R()
+        return run
+
+    def test_https_download_and_downscale(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+        calls = []
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=self._run_ok(calls),
+                                  which=lambda n: "/usr/bin/" + n)
+        assert info["found"] and info["year"] is None
+        assert Path(info["jpg"]).read_bytes() == b"BIGIMG"
+        assert Path(info["jpg_small"]).read_bytes() == b"SMALL"
+        assert calls and calls[0][0] == "magick"
+
+    def test_no_downscaler_skips_bar_art_keeps_notification_art(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=lambda *a, **k: None,
+                                  which=lambda n: None)
+        assert info["found"] and info["jpg"] is not None
+        assert info["jpg_small"] is None  # never risk the waybar freeze
+
+    def test_file_url_is_copied(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        src = tmp_path / "local art.jpg"
+        src.write_bytes(b"LOCAL")
+        url = "file://" + urllib.parse.quote(str(src))
+        info = rb.fetch_mpris_art(url, urlopen=None,
+                                  run=lambda *a, **k: None,
+                                  which=lambda n: None)
+        assert info["found"] and Path(info["jpg"]).read_bytes() == b"LOCAL"
+
+    def test_unsupported_or_failed_is_cached_miss(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        info = rb.fetch_mpris_art("", urlopen=None,
+                                  run=lambda *a, **k: None,
+                                  which=lambda n: None)
+        assert info == {"year": None, "found": False,
+                        "jpg": None, "jpg_small": None}
+        fake = _FakeHTTP({"i.scdn.co": OSError("down")})
+        rb.fetch_mpris_art("https://i.scdn.co/x", urlopen=fake,
+                           run=lambda *a, **k: None, which=lambda n: None)
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_mpris_art("https://i.scdn.co/x", urlopen=fake2,
+                                   run=lambda *a, **k: None,
+                                   which=lambda n: None)
+        assert again["found"] is False and fake2.calls == []
+
+    def test_cached_hit_skips_network(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+        calls = []
+        rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                           run=self._run_ok(calls),
+                           which=lambda n: "/usr/bin/" + n)
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_mpris_art("https://i.scdn.co/image/abc",
+                                   urlopen=fake2, run=lambda *a, **k: None,
+                                   which=lambda n: None)
+        assert again["found"] and fake2.calls == []
+
+
+class TestFetchTrackArtDispatch:
+    def test_none_art_url_uses_itunes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"itunes.apple.com":
+                          json.dumps({"results": []}).encode()})
+        info = rb.fetch_track_art("A - B", urlopen=fake)
+        assert info["found"] is False
+        assert any("itunes.apple.com" in u for u in fake.calls)
+
+
 class TestPublishArt:
     def test_copies_and_signals(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
@@ -798,7 +896,7 @@ class TestArtworkWorker:
     def _worker(self, fetched, jobs=None):
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: fetched,
+            fetch_fn=lambda t, art_url=None: fetched,
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=(jobs.append if jobs is not None else (lambda fn: fn())))
@@ -834,10 +932,12 @@ class TestArtworkWorker:
 
     def test_fetch_exception_swallowed_and_slot_released(self):
         jobs = []
-        w = rb.ArtworkWorker(fetch_fn=lambda t: (_ for _ in ()).throw(RuntimeError()),
-                             publish_fn=lambda jpg: None,
-                             notify_fn=lambda *a: None,
-                             spawn=jobs.append)
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t, art_url=None: (_ for _ in ()).throw(
+                RuntimeError()),
+            publish_fn=lambda jpg: None,
+            notify_fn=lambda *a: None,
+            spawn=jobs.append)
         w.track_changed("A - B", "FIP")
         jobs[0]()  # must not raise
         assert "A - B" not in w.in_flight
@@ -858,7 +958,7 @@ class TestArtworkWorker:
         }
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: fetched[t],
+            fetch_fn=lambda t, art_url=None: fetched[t],
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=jobs.append)
@@ -877,7 +977,7 @@ class TestArtworkWorker:
         jobs = []
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg",
+            fetch_fn=lambda t, art_url=None: {"year": 1990, "found": True, "jpg": "/a.jpg",
                                 "jpg_small": "/a-small.jpg"},
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
@@ -904,7 +1004,7 @@ class TestArtworkWorker:
         }
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: fetched[t],
+            fetch_fn=lambda t, art_url=None: fetched[t],
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=jobs.append)
@@ -923,7 +1023,7 @@ class TestArtworkWorker:
         jobs = []
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg",
+            fetch_fn=lambda t, art_url=None: {"year": 1990, "found": True, "jpg": "/a.jpg",
                                 "jpg_small": "/a-small.jpg"},
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
@@ -945,8 +1045,8 @@ class TestWatchArtworkHook:
         seen = []
 
         class W:
-            def track_changed(self, title, station):
-                seen.append((title, station))
+            def track_changed(self, title, subtitle, art_url=None):
+                seen.append((title, subtitle))
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
