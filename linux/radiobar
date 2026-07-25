@@ -208,7 +208,7 @@ def publish_art(jpg_path, run=subprocess.run):
     except OSError:
         return
     try:
-        run(["pkill", "-RTMIN+8", "waybar"], capture_output=True)
+        run(["pkill", "-RTMIN+6", "waybar"], capture_output=True)
     except OSError:
         pass
 

@@ -13,7 +13,7 @@
 "image#radioart": {
   "path": "/run/user/1000/radiobar-art.png",
   "size": 24,
-  "signal": 8,
+  "signal": 6,
   "tooltip": false
 }
 // (Adjust /run/user/1000 if your UID differs — echo $XDG_RUNTIME_DIR.)

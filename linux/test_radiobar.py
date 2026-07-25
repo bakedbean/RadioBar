@@ -623,7 +623,7 @@ class TestPublishArt:
         calls = []
         rb.publish_art(str(src), run=lambda cmd, **k: calls.append(cmd))
         assert (tmp_path / "art.png").read_bytes() == b"IMG"
-        assert calls == [["pkill", "-RTMIN+8", "waybar"]]
+        assert calls == [["pkill", "-RTMIN+6", "waybar"]]
 
     def test_none_clears_and_signals(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
@@ -631,7 +631,7 @@ class TestPublishArt:
         calls = []
         rb.publish_art(None, run=lambda cmd, **k: calls.append(cmd))
         assert not (tmp_path / "art.png").exists()
-        assert calls == [["pkill", "-RTMIN+8", "waybar"]]
+        assert calls == [["pkill", "-RTMIN+6", "waybar"]]
 
     def test_missing_pkill_binary_does_not_raise(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))

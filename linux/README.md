@@ -28,7 +28,7 @@ definitions (adjust the path to your `$XDG_RUNTIME_DIR`):
     "image#radioart": {
       "path": "/run/user/1000/radiobar-art.png",
       "size": 24,
-      "signal": 8,
+      "signal": 6,
       "tooltip": false
     }
 
@@ -72,7 +72,7 @@ never blocks the waybar status output: on each track change it queries the
 iTunes Search API (with an in-memory + on-disk cache under
 `~/.cache/radiobar/`), writes the cover art to
 `$XDG_RUNTIME_DIR/radiobar-art.png` on a hit, signals waybar
-(`pkill -RTMIN+8 waybar`) to refresh the `image#radioart` module, and sends
+(`pkill -RTMIN+6 waybar`) to refresh the `image#radioart` module, and sends
 a notification via `notify-send` (skipped if `RADIOBAR_NO_NOTIFY=1` is
 set). `radiobar stop` clears the art file and re-signals waybar so the
 thumbnail disappears.
