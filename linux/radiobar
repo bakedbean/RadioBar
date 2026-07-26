@@ -964,7 +964,10 @@ def _pdeathsig_preexec():
     """
     try:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
+        # PR_SET_PDEATHSIG = 1; prctl(2) takes five args — pass explicit
+        # zeros for the unused ones rather than relying on the variadic
+        # glibc wrapper forwarding garbage registers the kernel ignores.
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)
     except Exception:
         pass
 
@@ -984,8 +987,8 @@ class MprisSource:
                                   stderr=subprocess.DEVNULL, text=True,
                                   preexec_fn=_pdeathsig_preexec)
             except (FileNotFoundError, PermissionError):
-                print("radiobar: playerctl not found — "
-                      "MPRIS sources disabled", file=sys.stderr)
+                print("radiobar: playerctl unavailable (not found or not "
+                      "executable) — MPRIS sources disabled", file=sys.stderr)
                 return
             except OSError:
                 # Spawn failed: any players fed by a prior run are now
