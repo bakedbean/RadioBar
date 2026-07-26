@@ -654,6 +654,7 @@ class TestCmdMenu:
 
     def test_selection_is_played(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         played = []
         monkeypatch.setattr(rb, "cmd_play", lambda name: played.append(name) or 0)
         monkeypatch.setattr(rb, "find_menu_cmd",
@@ -666,6 +667,7 @@ class TestCmdMenu:
 
     def test_empty_selection_is_noop(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         played = []
         monkeypatch.setattr(rb, "cmd_play", lambda name: played.append(name) or 0)
         monkeypatch.setattr(rb, "find_menu_cmd",
@@ -675,6 +677,7 @@ class TestCmdMenu:
         assert played == []
 
     def test_no_menu_tool_notifies_and_fails(self, monkeypatch):
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "find_menu_cmd", lambda which=None: None)
         notified = []
         run, _ = self._fake_run("")
@@ -687,6 +690,7 @@ class TestCmdMenu:
 
     def test_unknown_choice_notifies_and_returns_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "cmd_play", lambda name: 1)
         monkeypatch.setattr(rb, "find_menu_cmd",
                             lambda which=None: ["walker", "--dmenu"])
@@ -695,6 +699,29 @@ class TestCmdMenu:
         assert any(c[0][0] == "notify-send" for c in calls)
         notify_call = next(c for c in calls if c[0][0] == "notify-send")
         assert "Nope FM" in notify_call[0][2]
+
+    def test_stop_entry_offered_and_dispatches_when_radio_running(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command",
+                            lambda args: {"error": "success", "data": False})
+        stopped = []
+        monkeypatch.setattr(rb, "cmd_stop", lambda: stopped.append(1) or 0)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, calls = self._fake_run(rb.STOP_ENTRY + "\n")
+        assert rb.cmd_menu(run=run) == 0
+        assert stopped == [1]
+        assert calls[0][1]["input"].startswith(rb.STOP_ENTRY + "\n")
+
+    def test_no_stop_entry_when_radio_stopped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, calls = self._fake_run("")
+        assert rb.cmd_menu(run=run) == 0
+        assert rb.STOP_ENTRY not in calls[0][1]["input"]
 
 
 class TestParseItunesResponse:
@@ -1226,6 +1253,7 @@ class TestWriteLastRobustness:
 
 class TestCmdMenuNotifyRobustness:
     def test_missing_notify_send_no_menu_tool_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "find_menu_cmd", lambda which=None: None)
 
         def run(cmd, **kwargs):
@@ -1236,6 +1264,7 @@ class TestCmdMenuNotifyRobustness:
     def test_missing_notify_send_unknown_choice_does_not_raise(
             self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "find_menu_cmd",
                             lambda which=None: ["walker", "--dmenu"])
         monkeypatch.setattr(rb, "cmd_play", lambda name: 1)

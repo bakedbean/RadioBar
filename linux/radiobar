@@ -24,6 +24,8 @@ ICON_PLAY = "\U000f040a"   # 󰐊
 ICON_PAUSE = "\U000f03e4"  # 󰏤
 ICON_IDLE = "\U000f0439"   # 󰐹
 
+STOP_ENTRY = "■ Stop radio"
+
 SCROLL_WINDOW = 30
 SCROLL_PAD = "   •   "
 PAUSE_TICKS = 10          # 1 s of hold at TICK_SECONDS per step
@@ -789,11 +791,16 @@ def cmd_menu(run=subprocess.run) -> int:
             pass
         return 1
     stations = load_stations()
-    names = "\n".join(s["name"] for s in stations) + "\n"
-    result = run(menu, input=names, capture_output=True, text=True)
+    names = [s["name"] for s in stations]
+    if ipc_command(["get_property", "pause"]) is not None:
+        names.insert(0, STOP_ENTRY)
+    result = run(menu, input="\n".join(names) + "\n",
+                 capture_output=True, text=True)
     choice = result.stdout.strip()
     if not choice:
         return 0
+    if choice == STOP_ENTRY:
+        return cmd_stop()
     rc = cmd_play(choice)
     if rc != 0:
         try:
