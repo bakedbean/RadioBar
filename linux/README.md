@@ -67,7 +67,8 @@ The bar shows exactly one source at a time: radio whenever it's audible,
 otherwise the most relevant MPRIS player (the one that's playing; if
 several are paused, whichever changed most recently). Titles longer than
 30 characters scroll in a colored window; the full title is in the
-tooltip. For radio, the module shows `󰐊 Artist – Song` while playing and
+tooltip. While playback is paused (radio or MPRIS) the marquee stops at
+the start of the title and resumes scrolling on play. For radio, the module shows `󰐊 Artist – Song` while playing and
 `󰏤 Artist – Song` when paused (icon and CSS class change, the title
 stays). For MPRIS sources, the leading icon identifies the player
 (Spotify, Shortwave, Discord, or a generic music note) instead, with a
