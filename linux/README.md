@@ -77,7 +77,14 @@ everything's off.
 monospace font, but any module to the *right* of the radio slot whose text
 changes width (live network bandwidth, cpu/memory percent crossing digit
 counts, battery 99↔100%) shifts the art/title sideways whenever it updates.
-Fix it with a CSS `min-width` reserve on those modules, e.g.:
+Two fixes, best first: pad the variable fields to a fixed character width
+in the module's format string and give that module the same monospace font
+(constant width, no dead space):
+
+    "format": "{icon} ⇣{bandwidthDownBytes:>9} ⇡{bandwidthUpBytes:>9}"
+    /* style.css */  #network, #network label { font-family: "CaskaydiaMono Nerd Font"; }
+
+or, cruder, reserve worst-case space with CSS (leaves visible slack):
 
     #network { min-width: 210px; }
 
