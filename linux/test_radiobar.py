@@ -564,6 +564,21 @@ class TestMprisSource:
         assert callable(calls[0].get("preexec_fn"))
         assert calls[0]["preexec_fn"] is rb._pdeathsig_preexec
 
+    def test_pdeathsig_preexec_swallows_missing_symbol(self, monkeypatch):
+        # ctypes.CDLL(...).prctl raises AttributeError when the symbol is
+        # missing — not an OSError — and subprocess re-raises any preexec_fn
+        # exception as SubprocessError, which would kill the MPRIS watcher
+        # thread. The helper must swallow this too.
+        class _FakeLib:
+            def prctl(self, *a, **kw):
+                raise AttributeError("no prctl")
+
+        def fake_cdll(name, use_errno=True):
+            return _FakeLib()
+
+        monkeypatch.setattr(rb.ctypes, "CDLL", fake_cdll)
+        rb._pdeathsig_preexec()  # must not raise
+
 
 class TestRadioWatcher:
     def test_disconnected_sets_idle_radio_state(self, monkeypatch, tmp_path):
