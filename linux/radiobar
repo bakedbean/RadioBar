@@ -605,6 +605,9 @@ class StateStore:
 
     def set_radio(self, state: dict):
         with self._lock:
+            unchanged = {k: v for k, v in self._radio.items() if k != "seq"}
+            if state == unchanged:
+                return
             self._seq += 1
             s = dict(state)
             s["seq"] = self._seq
@@ -916,7 +919,7 @@ class MprisSource:
             try:
                 proc = self.popen(PLAYERCTL_CMD, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, text=True)
-            except FileNotFoundError:
+            except (FileNotFoundError, PermissionError):
                 print("radiobar: playerctl not found — "
                       "MPRIS sources disabled", file=sys.stderr)
                 return

@@ -438,11 +438,16 @@ class TestWatch:
 
 
 class _FakeProc:
-    def __init__(self, lines):
+    def __init__(self, lines, on_wait=None):
         import io
         self.stdout = io.StringIO("".join(lines))
+        self.wait_calls = 0
+        self._on_wait = on_wait
 
     def wait(self):
+        self.wait_calls += 1
+        if self._on_wait:
+            self._on_wait()
         return 0
 
 
@@ -454,22 +459,34 @@ class TestMprisSource:
     def test_lines_feed_store_then_respawn_then_disabled(self, capsys):
         store = rb.StateStore()
         spawns = []
+        order = []
 
         def popen(cmd, **kwargs):
             spawns.append(cmd)
             if len(spawns) == 1:
-                return _FakeProc(["spotify\tPlaying\tAr\tTi\t\n",
-                                  "spotify\tStopped\t\t\t\n"])
+                # firefox survives (last line for it is Playing); spotify
+                # is fed Playing then Stopped and must be dropped.
+                return _FakeProc(
+                    ["firefox\tPlaying\tAr\tTi\turl\n",
+                     "spotify\tPlaying\tA2\tT2\t\n",
+                     "spotify\tStopped\t\t\t\n"],
+                    on_wait=lambda: order.append("wait"))
             raise FileNotFoundError("playerctl")
 
-        slept = []
-        rb.MprisSource(store, popen=popen,
-                       sleep=lambda s: slept.append(s)).run()
+        def sleep(s):
+            order.append(("sleep", s))
+
+        rb.MprisSource(store, popen=popen, sleep=sleep).run()
         assert spawns[0] == rb.PLAYERCTL_CMD
         assert len(spawns) == 2      # EOF → respawn attempt
-        assert slept == [2]
+        # proc.wait() must happen before the respawn sleep.
+        assert order == ["wait", ("sleep", 2)]
         _, players = store.snapshot()
-        assert players == {}          # Playing then Stopped → dropped
+        assert set(players) == {"firefox"}    # spotify Stopped → dropped
+        assert players["firefox"]["status"] == "Playing"
+        assert players["firefox"]["artist"] == "Ar"
+        assert players["firefox"]["title"] == "Ti"
+        assert players["firefox"]["art_url"] == "url"
         assert "playerctl" in capsys.readouterr().err
 
     def test_oserror_spawn_retries(self):
@@ -489,6 +506,77 @@ class TestMprisSource:
         with pytest.raises(_StopLoop):
             rb.MprisSource(store, popen=popen, sleep=sleep).run()
         assert len(attempts) == 3
+
+    def test_permission_error_disables_like_missing_binary(self, capsys):
+        store = rb.StateStore()
+
+        def popen(cmd, **kwargs):
+            raise PermissionError("playerctl")
+
+        rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
+        assert "playerctl" in capsys.readouterr().err
+
+
+class TestRadioWatcher:
+    def test_disconnected_sets_idle_radio_state(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RADIOBAR_SOCK", str(tmp_path / "nonexistent.sock"))
+        store = rb.StateStore()
+        calls = []
+
+        class _Stop(Exception):
+            pass
+
+        def fake_sleep(s):
+            calls.append(s)
+            raise _Stop()
+
+        monkeypatch.setattr(rb.time, "sleep", fake_sleep)
+
+        import pytest
+        with pytest.raises(_Stop):
+            rb.radio_watcher(store)
+        assert calls == [2]
+        radio, _ = store.snapshot()
+        assert radio["running"] is False
+
+
+class TestCmdStatus:
+    def test_starts_two_daemon_threads_and_runs_render_loop(self, monkeypatch):
+        threads = []
+
+        class FakeThread:
+            def __init__(self, target=None, args=(), kwargs=None,
+                        daemon=None):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                threads.append(self)
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(rb.threading, "Thread", FakeThread)
+
+        ran = []
+        stores_seen = []
+
+        class FakeNowPlaying:
+            def __init__(self, store, worker):
+                stores_seen.append(store)
+
+            def run(self):
+                ran.append(True)
+
+        monkeypatch.setattr(rb, "NowPlaying", FakeNowPlaying)
+
+        assert rb.cmd_status() == 0
+        assert len(threads) == 2
+        assert all(t.daemon is True for t in threads)
+        assert threads[0].target is rb.radio_watcher
+        assert threads[0].args == (stores_seen[0],)
+        assert threads[1].target.__func__ is rb.MprisSource.run
+        assert threads[1].target.__self__.store is stores_seen[0]
+        assert ran == [True]
 
 
 class TestMainDispatch:
@@ -1295,6 +1383,18 @@ class TestStateStore:
         players["spotify"]["status"] = "Paused"
         _, players2 = store.snapshot()
         assert players2["spotify"]["status"] == "Playing"
+
+    def test_set_radio_repeated_identical_state_is_a_noop(self):
+        store = rb.StateStore()
+        store.set_radio({"running": True, "paused": False, "icy": None,
+                         "media": None, "station": "FIP"})
+        radio1, _ = store.snapshot()
+        store.changed.clear()
+        store.set_radio({"running": True, "paused": False, "icy": None,
+                         "media": None, "station": "FIP"})
+        radio2, _ = store.snapshot()
+        assert radio2["seq"] == radio1["seq"]
+        assert not store.changed.is_set()
 
 
 class TestActiveFile:
