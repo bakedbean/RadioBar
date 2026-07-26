@@ -3,7 +3,7 @@
 APP_NAME = RadioBar
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-SOURCES = Sources/main.swift Sources/Station.swift Sources/MetadataParser.swift Sources/RadioPlayer.swift Sources/AppDelegate.swift Sources/ArtworkFetcher.swift Sources/GlobalHotkey.swift Sources/TrackClassifier.swift
+SOURCES = Sources/main.swift Sources/Station.swift Sources/MetadataParser.swift Sources/RadioPlayer.swift Sources/AppDelegate.swift Sources/ArtworkFetcher.swift Sources/GlobalHotkey.swift Sources/TrackClassifier.swift Sources/HTMLEntities.swift
 ICONSET = $(BUILD_DIR)/AppIcon.iconset
 ICNS = $(BUILD_DIR)/AppIcon.icns
 
@@ -33,13 +33,15 @@ run: build
 
 capture:
 	@mkdir -p $(BUILD_DIR)
-	swiftc -o $(BUILD_DIR)/capture-metadata Sources/MetadataParser.swift tools/capture_metadata.swift
+	swiftc -o $(BUILD_DIR)/capture-metadata Sources/MetadataParser.swift Sources/HTMLEntities.swift tools/capture_metadata.swift
 	./$(BUILD_DIR)/capture-metadata
 
 test:
 	@mkdir -p $(BUILD_DIR)
 	swiftc -o $(BUILD_DIR)/trackclassifier-tests Sources/TrackClassifier.swift Tests/TrackClassifierTests.swift
 	./$(BUILD_DIR)/trackclassifier-tests
+	swiftc -o $(BUILD_DIR)/htmlentities-tests Sources/HTMLEntities.swift Tests/HTMLEntitiesTests.swift
+	./$(BUILD_DIR)/htmlentities-tests
 
 clean:
 	rm -rf $(BUILD_DIR)

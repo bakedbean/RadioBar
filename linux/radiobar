@@ -435,7 +435,9 @@ def pick_title(icy_title, media_title, station_name) -> str:
     for candidate in (icy_title, media_title):
         if not candidate:
             continue
-        candidate = candidate.strip()
+        # Some stations HTML-encode ICY metadata ("Don&apos;t Stop");
+        # decode here or the render-time pango escape shows it literally.
+        candidate = html.unescape(candidate).strip()
         if candidate and not candidate.lower().startswith(("http://", "https://")):
             return candidate
     return station_name
@@ -608,8 +610,11 @@ def parse_playerctl_line(line: str):
     name, status, artist, title, art_url = parts
     if status not in ("Playing", "Paused"):
         return (name, None)
-    return (name, {"status": status, "artist": artist or None,
-                   "title": title or None, "art_url": art_url or None})
+    # Decode HTML entities some players leak into metadata; art_url stays
+    # raw — unescaping could corrupt signed query strings.
+    return (name, {"status": status, "artist": html.unescape(artist) or None,
+                   "title": html.unescape(title) or None,
+                   "art_url": art_url or None})
 
 
 class StateStore:
