@@ -437,6 +437,60 @@ class TestWatch:
         assert radio["station"] == "FIP"
 
 
+class _FakeProc:
+    def __init__(self, lines):
+        import io
+        self.stdout = io.StringIO("".join(lines))
+
+    def wait(self):
+        return 0
+
+
+class _StopLoop(Exception):
+    pass
+
+
+class TestMprisSource:
+    def test_lines_feed_store_then_respawn_then_disabled(self, capsys):
+        store = rb.StateStore()
+        spawns = []
+
+        def popen(cmd, **kwargs):
+            spawns.append(cmd)
+            if len(spawns) == 1:
+                return _FakeProc(["spotify\tPlaying\tAr\tTi\t\n",
+                                  "spotify\tStopped\t\t\t\n"])
+            raise FileNotFoundError("playerctl")
+
+        slept = []
+        rb.MprisSource(store, popen=popen,
+                       sleep=lambda s: slept.append(s)).run()
+        assert spawns[0] == rb.PLAYERCTL_CMD
+        assert len(spawns) == 2      # EOF → respawn attempt
+        assert slept == [2]
+        _, players = store.snapshot()
+        assert players == {}          # Playing then Stopped → dropped
+        assert "playerctl" in capsys.readouterr().err
+
+    def test_oserror_spawn_retries(self):
+        store = rb.StateStore()
+        attempts = []
+
+        def popen(cmd, **kwargs):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise OSError("busy")
+            raise _StopLoop()
+
+        def sleep(s):
+            pass
+
+        import pytest
+        with pytest.raises(_StopLoop):
+            rb.MprisSource(store, popen=popen, sleep=sleep).run()
+        assert len(attempts) == 3
+
+
 class TestMainDispatch:
     def test_unknown_command_usage(self, capsys):
         assert rb.main(["bogus"]) == 2

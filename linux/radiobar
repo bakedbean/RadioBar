@@ -899,37 +899,47 @@ def watch(sock, store):
                 store.set_radio(state)
 
 
-class _EmittingStore(StateStore):
-    """Task-7 bridge: render radio updates synchronously until the full
-    render loop lands (Task 9/10)."""
-
-    def __init__(self, renderer, worker):
-        super().__init__()
-        self._renderer = renderer
-        self._worker = worker
-        self._last_title = None
-
-    def set_radio(self, state):
-        super().set_radio(state)
-        radio, players = self.snapshot()
-        active = arbiter(radio, players)
-        emit(self._renderer.render(active))
-        if active["source"] == "radio" and active["title"] != self._last_title:
-            self._last_title = active["title"]
-            self._worker.track_changed(active["title"], active["station"])
+PLAYERCTL_CMD = ["playerctl", "--all-players", "--follow", "metadata",
+                 "--format", PLAYERCTL_FORMAT]
 
 
-def cmd_status() -> int:
-    renderer = Renderer()
-    worker = ArtworkWorker()
-    store = _EmittingStore(renderer, worker)
+class MprisSource:
+    """Feeds MPRIS player state into the store from playerctl --follow."""
+
+    def __init__(self, store, popen=subprocess.Popen, sleep=time.sleep):
+        self.store = store
+        self.popen = popen
+        self.sleep = sleep
+
+    def run(self):
+        while True:
+            try:
+                proc = self.popen(PLAYERCTL_CMD, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True)
+            except FileNotFoundError:
+                print("radiobar: playerctl not found — "
+                      "MPRIS sources disabled", file=sys.stderr)
+                return
+            except OSError:
+                self.sleep(2)
+                continue
+            for line in proc.stdout:
+                parsed = parse_playerctl_line(line)
+                if parsed is not None:
+                    self.store.update_player(*parsed)
+            proc.wait()
+            self.sleep(2)
+
+
+def radio_watcher(store):
+    """Reconnect loop feeding mpv events into the store."""
     while True:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             s.connect(str(socket_path()))
         except OSError:
             s.close()
-            emit(renderer.render(dict(IDLE_ACTIVE)))
+            store.set_radio({"running": False})
             time.sleep(2)
             continue
         try:
@@ -938,9 +948,17 @@ def cmd_status() -> int:
             pass
         finally:
             s.close()
-        worker.clear()
-        emit(renderer.render(dict(IDLE_ACTIVE)))
+        store.set_radio({"running": False})
         time.sleep(2)
+
+
+def cmd_status() -> int:
+    store = StateStore()
+    threading.Thread(target=radio_watcher, args=(store,),
+                     daemon=True).start()
+    threading.Thread(target=MprisSource(store).run, daemon=True).start()
+    NowPlaying(store, ArtworkWorker()).run()
+    return 0
 
 
 USAGE = "usage: radiobar status|toggle|play <name-or-url>|stop|menu|click|prev|next"
