@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RadioBar for waybar — internet radio with live track info in the bar.
 
-Subcommands: status | toggle | play <name-or-url> | stop | menu
+Subcommands: status | toggle | play <name-or-url> | stop | menu | click | prev | next
 Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
 """
 import hashlib

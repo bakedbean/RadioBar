@@ -57,7 +57,7 @@ duplicate now-playing info in the bar.
 |---|---|
 | Play/pause the shown source | Left-click the module (starts your last station if nothing's playing), or SUPER+SHIFT+R |
 | Previous track (MPRIS only) | Middle-click the module |
-| Switch station / stop radio | Right-click the module — shows `■ Stop radio` first while radio is playing |
+| Switch station / stop radio | Right-click the module — shows `■ Stop radio` first while radio is running |
 | Next track (MPRIS only) | `radiobar next` (bind to a hotkey if you want one) |
 | Add a station | Edit `~/.config/radiobar/stations.json` (same schema as the macOS app) |
 | Stop radio | `radiobar stop` |
@@ -67,8 +67,8 @@ otherwise the most relevant MPRIS player (the one that's playing; if
 several are paused, whichever changed most recently). Titles longer than
 30 characters scroll in a colored window; the full title is in the
 tooltip. The module shows `󰐊 Artist – Song` while playing (radio or
-MPRIS), `󰏤 Station` when radio is paused, and a dim `󰐹` when everything's
-off.
+MPRIS), `󰏤 Artist – Song` when paused (icon and CSS class change, the
+title stays), and a dim `󰐹` when everything's off.
 
 Only one source is ever audible: starting playback on an MPRIS player
 (Spotify, a browser tab, Discord, ...) pauses radio, and resuming or
@@ -120,9 +120,12 @@ and recency breaks ties among same-state MPRIS players. `radiobar toggle`
 and `radiobar play` call `playerctl -a pause` before starting or resuming
 radio so nothing else stays audible; conversely, any MPRIS player
 transitioning to "Playing" makes RadioBar pause the mpv radio stream.
-`radiobar click`/`prev`/`next` forward to `playerctl play-pause` /
-`previous` / `next` on the currently-shown player when it's an MPRIS
-source, or to radio's own toggle otherwise. For MPRIS art, the worker
+`radiobar click` forwards to `playerctl play-pause` on the currently-shown
+player when it's an MPRIS source, or falls back to radio's own toggle
+(including cold-starting the last station) otherwise. `radiobar prev`/
+`next` forward to `playerctl previous`/`next` only when the shown source
+is MPRIS; if radio is the shown source (or nothing is playing), they
+no-op — they never touch radio playback. For MPRIS art, the worker
 fetches the track's `mpris:artUrl` and downscales it to 128px with
 whichever of `magick`, `convert`, or `ffmpeg` is available (radio's
 iTunes-sourced art is unaffected either way).
