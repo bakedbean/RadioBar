@@ -823,6 +823,54 @@ def emit(d: dict):
     print(json.dumps(d, separators=(",", ":")), flush=True)
 
 
+class NowPlaying:
+    """Render loop: guard -> arbiter -> emit; side effects on track change."""
+
+    def __init__(self, store, worker, renderer=None, emit_fn=emit,
+                 ipc=ipc_command, write_active_fn=write_active):
+        self.store = store
+        self.worker = worker
+        self.renderer = renderer or Renderer()
+        self.emit = emit_fn
+        self.ipc = ipc
+        self.write_active = write_active_fn
+        self.prev_players = {}
+        self.last_identity = None
+
+    def tick(self):
+        radio, players = self.store.snapshot()
+        radio_playing = bool(radio.get("running")) and not radio.get("paused")
+        if guard_action(self.prev_players, players, radio_playing):
+            self.ipc(["set_property", "pause", True])
+            radio = dict(radio)
+            radio["paused"] = True  # reflect before mpv's event round-trips
+        self.prev_players = players
+        active = arbiter(radio, players)
+        self.emit(self.renderer.render(active))
+        identity = (active["source"], active["player"], active["artist"],
+                    active["title"])
+        if identity == self.last_identity:
+            return
+        self.last_identity = identity
+        self.write_active(active)
+        if active["source"] == "idle":
+            self.worker.clear()
+        elif active["source"] == "radio":
+            self.worker.track_changed(active["title"], active["station"])
+        else:
+            self.worker.track_changed(mpris_display_title(active),
+                                      (active["player"] or "").capitalize(),
+                                      active["art_url"] or "")
+
+    def run(self):
+        self.tick()
+        while True:
+            timeout = TICK_SECONDS if self.renderer.needs_tick() else None
+            self.store.changed.wait(timeout=timeout)
+            self.store.changed.clear()
+            self.tick()
+
+
 def watch(sock, store):
     """Observe mpv properties on an open socket; feed the store until close."""
     tracker = StatusTracker(read_last() or "")

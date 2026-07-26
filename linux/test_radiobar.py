@@ -1321,3 +1321,101 @@ class TestMainDispatchNewCommands:
                          ("next", "cmd_next")):
             monkeypatch.setattr(rb, fn, lambda run=None: 0)
             assert rb.main([name]) == 0
+
+
+class _NP:
+    """Harness: NowPlaying with everything injected and recorded."""
+
+    def __init__(self):
+        self.store = rb.StateStore()
+        self.emitted, self.ipc_calls, self.actives = [], [], []
+        self.worker_calls = []
+
+        class W:
+            def track_changed(w, title, subtitle, art_url=None):
+                self.worker_calls.append(("track", title, subtitle, art_url))
+
+            def clear(w):
+                self.worker_calls.append(("clear",))
+
+        self.np = rb.NowPlaying(
+            self.store, W(),
+            renderer=rb.Renderer(choose=lambda colors: colors[0]),
+            emit_fn=self.emitted.append,
+            ipc=lambda args: self.ipc_calls.append(args) or {"error": "success"},
+            write_active_fn=self.actives.append)
+
+
+class TestNowPlaying:
+    def test_idle_tick_emits_idle_and_clears_worker(self):
+        h = _NP()
+        h.np.tick()
+        assert h.emitted[-1]["class"] == "idle"
+        assert h.worker_calls == [("clear",)]
+        assert h.actives[-1]["source"] == "idle"
+
+    def test_radio_track_kicks_worker_once(self):
+        h = _NP()
+        h.store.set_radio({"running": True, "paused": False, "icy": "A - B",
+                           "media": None, "station": "FIP"})
+        h.np.tick()
+        h.np.tick()  # same identity → no second worker call
+        assert h.worker_calls == [("track", "A - B", "FIP", None)]
+        assert h.actives[-1]["source"] == "radio"
+
+    def test_mpris_track_passes_art_url_and_player_subtitle(self):
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": "https://a/i"})
+        h.np.tick()
+        assert h.worker_calls == [("track", "Ar - Ti", "Spotify", "https://a/i")]
+        assert h.actives[-1] == {"source": "mpris", "player": "spotify",
+                                 "playing": True, "artist": "Ar",
+                                 "title": "Ti", "art_url": "https://a/i",
+                                 "station": None}
+
+    def test_mpris_without_art_url_passes_empty_string(self):
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        assert h.worker_calls == [("track", "Ar - Ti", "Spotify", "")]
+
+    def test_guard_pauses_radio_when_player_starts(self):
+        h = _NP()
+        h.store.set_radio({"running": True, "paused": False, "icy": "A - B",
+                           "media": None, "station": "FIP"})
+        h.np.tick()  # radio showing
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        assert ["set_property", "pause", True] in h.ipc_calls
+        # after the guard, the emitted line is spotify (radio now paused)
+        assert "Ar - Ti" in h.emitted[-1]["text"]
+
+    def test_guard_does_not_refire_on_level_state(self):
+        h = _NP()
+        h.store.set_radio({"running": True, "paused": False, "icy": "A - B",
+                           "media": None, "station": "FIP"})
+        h.np.tick()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        n = h.ipc_calls.count(["set_property", "pause", True])
+        h.np.tick()
+        h.np.tick()
+        assert h.ipc_calls.count(["set_property", "pause", True]) == n
+
+    def test_source_flip_writes_active_file(self):
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": None,
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        h.store.update_player("spotify", None)
+        h.np.tick()
+        assert [a["source"] for a in h.actives] == ["mpris", "idle"]
