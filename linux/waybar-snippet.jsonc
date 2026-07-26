@@ -1,5 +1,7 @@
-// Add "custom/radio" to one of the modules arrays in ~/.config/waybar/config.jsonc
-// (e.g. "modules-right"), then paste this block among the module definitions:
+// Add "custom/radio" to one of the modules arrays in ~/.config/waybar/config.jsonc.
+// The END of "modules-left" is the best spot: its free edge faces the empty
+// center, so the scrolling title can never be nudged by (or nudge) other
+// modules. Then paste this block among the module definitions:
 "custom/radio": {
   "exec": "radiobar status",
   "return-type": "json",

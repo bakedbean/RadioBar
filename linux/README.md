@@ -26,7 +26,8 @@ everything else pauses. One script + mpv, no daemon.
     chmod +x ~/.local/bin/radiobar
 
 **Waybar** — merge `linux/waybar-snippet.jsonc` into
-`~/.config/waybar/config.jsonc` (add `"custom/radio"` to a modules array and
+`~/.config/waybar/config.jsonc` (add `"custom/radio"` to a modules array —
+the end of `"modules-left"` is best, see the snippet's note — and
 paste the module block), append `linux/style-snippet.css` to
 `~/.config/waybar/style.css`, then restart waybar (`omarchy restart waybar`
 on omarchy).
