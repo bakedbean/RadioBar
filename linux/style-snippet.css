@@ -1,9 +1,16 @@
 /* Append to ~/.config/waybar/style.css */
 #custom-radio {
   padding: 0 10px;
+}
+
+#custom-radio,
+#custom-radio label {
   /* Scrolling text needs a monospace font or the 30-char scroll window's
      pixel width varies each tick, and the module's left edge jumps.
-     CaskaydiaMono NF ships with omarchy. */
+     CaskaydiaMono NF ships with omarchy. Set on the label node too:
+     GTK CSS matches the module's inner label directly with a universal
+     `* { font-family: ... }` selector in style.css, and that direct match
+     beats a font merely inherited from the #custom-radio container. */
   font-family: "CaskaydiaMono Nerd Font";
 }
 

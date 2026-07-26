@@ -546,6 +546,24 @@ class TestMprisSource:
         rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
         assert "playerctl" in capsys.readouterr().err
 
+    def test_spawns_with_parent_death_signal(self):
+        # A playerctl --follow child must not outlive radiobar as an
+        # orphan across waybar restarts — verify the popen call asks
+        # the kernel to signal it via a preexec_fn.
+        store = rb.StateStore()
+        calls = []
+
+        def popen(cmd, **kwargs):
+            calls.append(kwargs)
+            raise _StopLoop()
+
+        import pytest
+        with pytest.raises(_StopLoop):
+            rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
+        assert len(calls) == 1
+        assert callable(calls[0].get("preexec_fn"))
+        assert calls[0]["preexec_fn"] is rb._pdeathsig_preexec
+
 
 class TestRadioWatcher:
     def test_disconnected_sets_idle_radio_state(self, monkeypatch, tmp_path):

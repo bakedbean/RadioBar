@@ -73,6 +73,14 @@ stays). For MPRIS sources, the leading icon identifies the player
 `󰏤` status icon appended only when paused. A dim `󰐹` shows when
 everything's off.
 
+**If the bar still jogs**: the scroll window itself is fixed-width under a
+monospace font, but any module to the *right* of the radio slot whose text
+changes width (live network bandwidth, cpu/memory percent crossing digit
+counts, battery 99↔100%) shifts the art/title sideways whenever it updates.
+Fix it with a CSS `min-width` reserve on those modules, e.g.:
+
+    #network { min-width: 210px; }
+
 Only one source is ever audible: starting playback on an MPRIS player
 (Spotify, a browser tab, Discord, ...) pauses radio, and resuming or
 switching radio (`toggle`, `play`) pauses every other MPRIS player via

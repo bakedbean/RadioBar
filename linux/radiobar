@@ -11,6 +11,7 @@ import json
 import os
 import random
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -950,6 +951,21 @@ PLAYERCTL_CMD = ["playerctl", "--all-players", "--follow", "metadata",
                  "--format", PLAYERCTL_FORMAT]
 
 
+def _pdeathsig_preexec():
+    """Ask the kernel to SIGTERM this child if radiobar itself dies.
+
+    Otherwise a `playerctl --follow` child survives its parent as an
+    orphan, and orphans accumulate across waybar restarts. Best-effort:
+    a failure here must never block the spawn.
+    """
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
+    except OSError:
+        pass
+
+
 class MprisSource:
     """Feeds MPRIS player state into the store from playerctl --follow."""
 
@@ -962,7 +978,8 @@ class MprisSource:
         while True:
             try:
                 proc = self.popen(PLAYERCTL_CMD, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, text=True)
+                                  stderr=subprocess.DEVNULL, text=True,
+                                  preexec_fn=_pdeathsig_preexec)
             except (FileNotFoundError, PermissionError):
                 print("radiobar: playerctl not found — "
                       "MPRIS sources disabled", file=sys.stderr)
