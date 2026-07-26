@@ -247,9 +247,14 @@ def find_downscaler(which=shutil.which):
     if which("convert"):
         return lambda src, dst: ["convert", src, "-resize", "128x128>", dst]
     if which("ffmpeg"):
-        return lambda src, dst: ["ffmpeg", "-y", "-loglevel", "error",
-                                 "-i", src, "-vf", "scale=min(128\\,iw):-2",
-                                 dst]
+        # force_original_aspect_ratio=decrease bounds BOTH axes at 128 —
+        # scale=min(128,iw):-2 only capped width, so portrait art (e.g.
+        # 600x1200) downscaled to 128x256 and breached the hard "never
+        # publish an image larger than 128px to the bar" invariant
+        # (waybar 0.15 freezes the whole bar on oversized images).
+        return lambda src, dst: [
+            "ffmpeg", "-y", "-loglevel", "error", "-i", src, "-vf",
+            "scale=128:128:force_original_aspect_ratio=decrease", dst]
     return None
 
 
@@ -632,6 +637,17 @@ class StateStore:
             return (dict(self._radio),
                     {k: dict(v) for k, v in self._players.items()})
 
+    def clear_players(self):
+        """Drop all MPRIS players (e.g. after a playerctl respawn gap, so
+        a player that vanished during the gap doesn't linger as a ghost
+        "Playing" entry owning the bar). No-op (changed left unset) if
+        already empty, mirroring set_radio's no-op latch."""
+        with self._lock:
+            if not self._players:
+                return
+            self._players = {}
+        self.changed.set()
+
 
 OBSERVED_PROPS = ["metadata/by-key/icy-title", "media-title", "pause"]
 
@@ -946,12 +962,19 @@ class MprisSource:
                       "MPRIS sources disabled", file=sys.stderr)
                 return
             except OSError:
+                # Spawn failed: any players fed by a prior run are now
+                # stale (we can't know if they're still alive) — drop them
+                # rather than let a ghost "Playing" entry own the bar.
+                self.store.clear_players()
                 self.sleep(2)
                 continue
             for line in proc.stdout:
                 parsed = parse_playerctl_line(line)
                 if parsed is not None:
                     self.store.update_player(*parsed)
+            # The follow stream stopped being live (EOF) — players that
+            # vanished during the gap before we respawn must not linger.
+            self.store.clear_players()
             proc.wait()
             self.sleep(2)
 

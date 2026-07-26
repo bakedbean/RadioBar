@@ -494,8 +494,8 @@ class TestMprisSource:
         def popen(cmd, **kwargs):
             spawns.append(cmd)
             if len(spawns) == 1:
-                # firefox survives (last line for it is Playing); spotify
-                # is fed Playing then Stopped and must be dropped.
+                # firefox is fed Playing (and would otherwise survive);
+                # spotify is fed Playing then Stopped and must be dropped.
                 return _FakeProc(
                     ["firefox\tPlaying\tAr\tTi\turl\n",
                      "spotify\tPlaying\tA2\tT2\t\n",
@@ -511,12 +511,12 @@ class TestMprisSource:
         assert len(spawns) == 2      # EOF → respawn attempt
         # proc.wait() must happen before the respawn sleep.
         assert order == ["wait", ("sleep", 2)]
+        # EOF clears ALL players (not just the dropped one): firefox was
+        # still "Playing" in the feed, but a stale ghost surviving the
+        # respawn gap would wrongly keep owning the bar. clear_players()
+        # fires before proc.wait()/the retry sleep, so nothing lingers.
         _, players = store.snapshot()
-        assert set(players) == {"firefox"}    # spotify Stopped → dropped
-        assert players["firefox"]["status"] == "Playing"
-        assert players["firefox"]["artist"] == "Ar"
-        assert players["firefox"]["title"] == "Ti"
-        assert players["firefox"]["art_url"] == "url"
+        assert players == {}
         assert "playerctl" in capsys.readouterr().err
 
     def test_oserror_spawn_retries(self):
@@ -890,6 +890,12 @@ class TestFindDownscaler:
         which = lambda n: "/usr/bin/ffmpeg" if n == "ffmpeg" else None
         argv = rb.find_downscaler(which)("in.jpg", "out.jpg")
         assert argv[0] == "ffmpeg" and "out.jpg" in argv
+        # Both axes must be bounded at 128 — scale=min(128,iw):-2 only
+        # capped width, letting portrait art (e.g. 600x1200) downscale to
+        # 128x256 and breach the "never publish >128px to the bar"
+        # invariant (waybar 0.15 freezes the bar on oversized images).
+        assert argv[argv.index("-vf") + 1] == \
+            "scale=128:128:force_original_aspect_ratio=decrease"
 
     def test_none_when_no_tool(self):
         assert rb.find_downscaler(lambda n: None) is None
@@ -1454,6 +1460,22 @@ class TestStateStore:
         radio2, _ = store.snapshot()
         assert radio2["seq"] == radio1["seq"]
         assert not store.changed.is_set()
+
+    def test_clear_players_on_empty_store_is_a_noop(self):
+        store = rb.StateStore()
+        store.changed.clear()
+        store.clear_players()
+        assert not store.changed.is_set()  # mirrors set_radio's no-op latch
+
+    def test_clear_players_on_nonempty_store_clears_and_sets_changed(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Playing", "artist": None,
+                                        "title": "T", "art_url": None})
+        store.changed.clear()
+        store.clear_players()
+        assert store.changed.is_set()
+        _, players = store.snapshot()
+        assert players == {}
 
 
 class TestActiveFile:
