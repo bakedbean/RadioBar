@@ -222,6 +222,20 @@ class TestPickTitle:
     def test_blank_values_skipped(self):
         assert rb.pick_title("  ", "", "St") == "St"
 
+    def test_html_entities_decoded(self):
+        # Some stations HTML-encode ICY metadata; the raw entity would
+        # otherwise be double-escaped at render time and shown literally.
+        assert (rb.pick_title("Don&apos;t Stop Believin&apos;", None, "St")
+                == "Don't Stop Believin'")
+        assert rb.pick_title(None, "Simon &amp; Garfunkel", "St") == "Simon & Garfunkel"
+
+    def test_numeric_entities_decoded(self):
+        assert rb.pick_title("It&#39;s Alright &#8211; Live", None, "St") \
+            == "It's Alright – Live"
+
+    def test_bare_ampersand_untouched(self):
+        assert rb.pick_title("Simon & Garfunkel", None, "St") == "Simon & Garfunkel"
+
 
 class TestStatusTracker:
     def test_initial_state(self):
@@ -1384,6 +1398,16 @@ class TestParsePlayerctlLine:
 
     def test_empty_player_name_is_ignored(self):
         assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
+
+    def test_html_entities_in_artist_and_title_decoded(self):
+        line = ("firefox\tPlaying\tSimon &amp; Garfunkel"
+                "\tDon&apos;t Stop\thttps://x/a?b=1&amp;c=2\n")
+        name, state = rb.parse_playerctl_line(line)
+        assert name == "firefox"
+        assert state["artist"] == "Simon & Garfunkel"
+        assert state["title"] == "Don't Stop"
+        # URLs must stay raw — unescaping could corrupt signed query strings
+        assert state["art_url"] == "https://x/a?b=1&amp;c=2"
 
 
 def _radio(playing=True, icy="A - B", station="FIP", seq=1):
