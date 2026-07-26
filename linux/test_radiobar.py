@@ -312,31 +312,58 @@ class TestIpcCommand:
 
 
 class TestToggle:
-    def test_running_mpv_gets_cycle_pause(self, monkeypatch):
-        sent = []
-        monkeypatch.setattr(rb, "ipc_command",
-                            lambda args: sent.append(args) or {"error": "success"})
-        assert rb.cmd_toggle() == 0
-        assert sent == [["cycle", "pause"]]
+    def test_playing_radio_gets_paused_without_touching_others(self, monkeypatch):
+        sent, runs = [], []
+        monkeypatch.setattr(rb, "ipc_command", lambda args: sent.append(args)
+                            or {"error": "success", "data": False})
+        assert rb.cmd_toggle(run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert sent == [["get_property", "pause"],
+                        ["set_property", "pause", True]]
+        assert runs == []  # pausing radio must NOT playerctl-pause others
 
-    def test_cold_start_launches_last_station(self, tmp_path, monkeypatch):
+    def test_paused_radio_resume_pauses_others_first(self, monkeypatch):
+        sent, runs = [], []
+        monkeypatch.setattr(rb, "ipc_command", lambda args: sent.append(args)
+                            or {"error": "success", "data": True})
+        assert rb.cmd_toggle(run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert runs == [["playerctl", "-a", "pause"]]
+        assert sent == [["get_property", "pause"],
+                        ["set_property", "pause", False]]
+
+    def test_cold_start_pauses_others_and_launches_last(
+            self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
         rb.write_last("FIP")
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
-        launched = []
+        launched, runs = [], []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_toggle() == 0
+        assert rb.cmd_toggle(run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert runs == [["playerctl", "-a", "pause"]]
         assert launched[0]["name"] == "FIP"
 
-    def test_cold_start_no_history_uses_first_station(self, tmp_path, monkeypatch):
+    def test_cold_start_no_history_uses_first_station(
+            self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         launched = []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_toggle() == 0
+        assert rb.cmd_toggle(run=lambda cmd, **k: None) == 0
         assert launched[0]["name"] == rb.BUILTIN_STATIONS[0]["name"]
+
+    def test_missing_playerctl_does_not_break_toggle(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        launched = []
+        monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
+
+        def run(cmd, **k):
+            raise FileNotFoundError("playerctl")
+        assert rb.cmd_toggle(run=run) == 0
+        assert launched
 
 
 class TestPlay:
@@ -345,7 +372,9 @@ class TestPlay:
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         launched = []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_play("fip") == 0
+        runs = []
+        assert rb.cmd_play("fip", run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert runs == [["playerctl", "-a", "pause"]]
         assert launched[0]["name"] == "FIP"
 
     def test_raw_url(self, tmp_path, monkeypatch):
@@ -353,12 +382,13 @@ class TestPlay:
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         launched = []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_play("https://example.com/stream.mp3") == 0
+        assert rb.cmd_play("https://example.com/stream.mp3",
+                           run=lambda cmd, **k: None) == 0
         assert launched[0]["streamURL"] == "https://example.com/stream.mp3"
 
     def test_unknown_name_errors(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
-        assert rb.cmd_play("Nope FM") == 1
+        assert rb.cmd_play("Nope FM", run=lambda cmd, **k: None) == 1
         assert "unknown station" in capsys.readouterr().err
 
 

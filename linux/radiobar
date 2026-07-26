@@ -729,9 +729,23 @@ def launch_mpv(station: dict):
     write_last(station["name"])
 
 
-def cmd_toggle() -> int:
-    if ipc_command(["cycle", "pause"]) is not None:
+def pause_other_players(run=subprocess.run):
+    try:
+        run(["playerctl", "-a", "pause"], capture_output=True)
+    except OSError:
+        pass
+
+
+def cmd_toggle(run=subprocess.run) -> int:
+    resp = ipc_command(["get_property", "pause"])
+    if resp is not None:
+        if resp.get("data") is True:
+            pause_other_players(run)
+            ipc_command(["set_property", "pause", False])
+        else:
+            ipc_command(["set_property", "pause", True])
         return 0
+    pause_other_players(run)
     stations = load_stations()
     station = None
     last = read_last()
@@ -743,7 +757,7 @@ def cmd_toggle() -> int:
     return 0
 
 
-def cmd_play(arg: str) -> int:
+def cmd_play(arg: str, run=subprocess.run) -> int:
     if arg.lower().startswith(("http://", "https://")):
         station = {"name": arg, "streamURL": arg, "genre": "", "websiteURL": None}
     else:
@@ -751,6 +765,7 @@ def cmd_play(arg: str) -> int:
         if station is None:
             print(f"radiobar: unknown station: {arg}", file=sys.stderr)
             return 1
+    pause_other_players(run)
     ipc_command(["quit"])
     launch_mpv(station)
     return 0
