@@ -175,9 +175,14 @@ final class MetadataParser: NSObject, URLSessionDataDelegate, @unchecked Sendabl
             .replacingOccurrences(of: "\0", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard let title = extractStreamTitle(from: cleaned), !title.isEmpty else {
+        guard let rawTitle = extractStreamTitle(from: cleaned), !rawTitle.isEmpty else {
             return  // empty chunk — don't overwrite the current display
         }
+
+        // Some stations HTML-encode metadata ("Don&apos;t Stop"); decode
+        // here so the menu bar, classifier, and artwork lookup all see
+        // the real text.
+        let title = HTMLEntities.decode(rawTitle)
 
         DispatchQueue.main.async { [weak self] in
             self?.onTrackUpdate?(title)
