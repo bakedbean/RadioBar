@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """RadioBar for waybar — internet radio with live track info in the bar.
 
-Subcommands: status | toggle | play <name-or-url> | stop | menu
+Subcommands: status | toggle | play <name-or-url> | stop | menu | click | prev | next
 Playback and ICY metadata are delegated to mpv over a JSON IPC socket.
 """
+import ctypes
 import hashlib
+import html
 import http.client
 import json
 import os
+import random
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -21,7 +25,28 @@ from pathlib import Path
 ICON_PLAY = "\U000f040a"   # 󰐊
 ICON_PAUSE = "\U000f03e4"  # 󰏤
 ICON_IDLE = "\U000f0439"   # 󰐹
-TITLE_LIMIT = 40
+
+STOP_ENTRY = "■ Stop radio"
+
+SCROLL_WINDOW = 30
+SCROLL_PAD = "   •   "
+PAUSE_TICKS = 10          # 1 s of hold at TICK_SECONDS per step
+TICK_SECONDS = 0.1
+
+COLORS = [
+    "#F5C402", "#f4b8e4", "#99d1db", "#a6d189", "#8caaee",
+    "#e5c890", "#ea999c", "#85c1dc", "#F57627", "#F74105",
+    "#c6a0f6", "#7dc4e4", "#f0c6c6", "#b7bdf8", "#eed49f",
+    "#f5a97f", "#91d7e3", "#cba6f7", "#fab387", "#94e2d5",
+]
+
+PLAYER_ICONS = {
+    "spotify": "\uf1bc",
+    "de.haeckerfelix.shortwave": "\uefbc",
+    "discord": "\uf1ff",
+}
+ICON_MPRIS_DEFAULT = "\U000f075a"
+ICON_MPRIS_PAUSED = "\uf04c"
 
 BUILTIN_STATIONS = [
     {"name": "WERS 88.9 FM",
@@ -129,6 +154,33 @@ def art_path() -> Path:
     return Path(runtime) / "radiobar-art.jpg"
 
 
+def active_path() -> Path:
+    override = os.environ.get("RADIOBAR_ACTIVE_PATH")
+    if override:
+        return Path(override)
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return Path(runtime) / "radiobar-active.json"
+
+
+def write_active(active: dict):
+    dest = active_path()
+    try:
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"source": active.get("source"),
+                                   "player": active.get("player")}))
+        os.replace(tmp, dest)
+    except OSError:
+        pass
+
+
+def read_active():
+    try:
+        data = json.loads(active_path().read_text())
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def parse_itunes_response(data: bytes) -> dict:
     """iTunes Search API payload -> {"art_url", "art_url_small", "year"}
     (all may be None)."""
@@ -190,13 +242,84 @@ def store_track_info(title: str, *, year, image_data, image_data_small=None):
         pass
 
 
-def fetch_track_art(title: str, urlopen=urllib.request.urlopen) -> dict:
+def find_downscaler(which=shutil.which):
+    """Return an argv builder producing a <=128px copy, or None."""
+    if which("magick"):
+        return lambda src, dst: ["magick", src, "-resize", "128x128>", dst]
+    if which("convert"):
+        return lambda src, dst: ["convert", src, "-resize", "128x128>", dst]
+    if which("ffmpeg"):
+        # force_original_aspect_ratio=decrease bounds BOTH axes at 128 —
+        # scale=min(128,iw):-2 only capped width, so portrait art (e.g.
+        # 600x1200) downscaled to 128x256 and breached the hard "never
+        # publish an image larger than 128px to the bar" invariant
+        # (waybar 0.15 freezes the whole bar on oversized images).
+        return lambda src, dst: [
+            "ffmpeg", "-y", "-loglevel", "error", "-i", src, "-vf",
+            "scale=128:128:force_original_aspect_ratio=decrease", dst]
+    return None
+
+
+def fetch_mpris_art(art_url: str, urlopen=urllib.request.urlopen,
+                    run=subprocess.run, which=shutil.which) -> dict:
+    """Fetch MPRIS artUrl into the shared cache (keyed by URL).
+
+    jpg_small is produced only via an external downscaler — waybar 0.15's
+    image module hangs the bar on large images, so with no downscaler the
+    bar art is skipped and only the notification gets the full image.
+    """
+    cached = cached_track_info(art_url)
+    if cached is not None:
+        return cached
+    data = None
+    if art_url.startswith(("http://", "https://")):
+        try:
+            with urlopen(art_url, timeout=10) as resp:
+                data = resp.read()
+        except (OSError, http.client.HTTPException):
+            data = None
+    elif art_url.startswith("file://"):
+        try:
+            path = urllib.parse.unquote(urllib.parse.urlparse(art_url).path)
+            data = Path(path).read_bytes()
+        except (OSError, ValueError):
+            data = None
+    if not data:
+        store_track_info(art_url, year=None, image_data=None)
+        return {"year": None, "found": False, "jpg": None, "jpg_small": None}
+    store_track_info(art_url, year=None, image_data=data)
+    jpg, jpg_small, _ = art_cache_paths(art_url)
+    scaler = find_downscaler(which)
+    small = None
+    if scaler is not None:
+        tmp = jpg_small.with_suffix(".tmp")
+        try:
+            result = run(scaler(str(jpg), str(tmp)), capture_output=True)
+            if getattr(result, "returncode", 1) == 0 and tmp.exists():
+                os.replace(tmp, jpg_small)
+                small = str(jpg_small)
+            else:
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            small = None
+    return {"year": None, "found": True, "jpg": str(jpg),
+            "jpg_small": small}
+
+
+def fetch_track_art(title: str, art_url=None,
+                    urlopen=urllib.request.urlopen) -> dict:
     """Cache-through art lookup; failed lookups are cached as misses.
 
-    Downloads both the 600x600 (for notifications) and the native 100x100
-    (for the waybar bar) images when available; each download is guarded
+    art_url is a string (MPRIS-reported mpris:artUrl) -> delegate to
+    fetch_mpris_art, keyed by URL. art_url is None -> the radio path
+    below: an iTunes Search API lookup keyed by title, which downloads
+    both the 600x600 (for notifications) and the native 100x100 (for the
+    waybar bar) images when available; each download is guarded
     independently so a failure on one doesn't lose the other.
     """
+    if art_url is not None:
+        return fetch_mpris_art(art_url, urlopen)
     cached = cached_track_info(title)
     if cached is not None:
         return cached
@@ -275,8 +398,8 @@ class ArtworkWorker:
         self.spawn = spawn or (lambda fn: threading.Thread(
             target=fn, daemon=True).start())
 
-    def track_changed(self, title, station):
-        if not title or title == station:
+    def track_changed(self, title, subtitle, art_url=None):
+        if not title or title == subtitle:
             self.latest = None
             self.publish(None)
             return
@@ -287,7 +410,7 @@ class ArtworkWorker:
 
         def job():
             try:
-                info = self.fetch(title)
+                info = self.fetch(title, art_url)
                 if self.latest != title:
                     return
                 # Publish only the native 100x100 image: waybar 0.15's
@@ -295,7 +418,7 @@ class ArtworkWorker:
                 # If the small download failed, publish nothing rather
                 # than risk the freeze.
                 self.publish(info.get("jpg_small"))
-                self.notify(title, station, info.get("year"), info.get("jpg"))
+                self.notify(title, subtitle, info.get("year"), info.get("jpg"))
             except Exception:
                 pass
             finally:
@@ -308,12 +431,6 @@ class ArtworkWorker:
         self.publish(None)
 
 
-def truncate(s: str, limit: int = TITLE_LIMIT) -> str:
-    if len(s) <= limit:
-        return s
-    return s[:limit - 1].rstrip() + "…"
-
-
 def pick_title(icy_title, media_title, station_name) -> str:
     for candidate in (icy_title, media_title):
         if not candidate:
@@ -324,23 +441,227 @@ def pick_title(icy_title, media_title, station_name) -> str:
     return station_name
 
 
-def waybar_output(*, running: bool, paused: bool = False, icy_title=None,
-                  media_title=None, station_name: str = "") -> dict:
-    if not running:
-        return {"text": ICON_IDLE, "tooltip": "RadioBar: off", "class": "idle"}
-    if paused:
-        return {"text": f"{ICON_PAUSE} {truncate(station_name)}",
-                "tooltip": f"Paused — {station_name}", "class": "paused"}
-    title = pick_title(icy_title, media_title, station_name)
-    return {"text": f"{ICON_PLAY} {truncate(title)}",
-            "tooltip": f"{title}\n{station_name}".strip(), "class": "playing"}
+def scroll_window(text: str, width: int, offset: int) -> str:
+    padded = text + SCROLL_PAD + text
+    start = offset % (len(text) + len(SCROLL_PAD))
+    return padded[start:start + width]
+
+
+def player_icon(name) -> str:
+    for key, icon in PLAYER_ICONS.items():
+        if key in (name or "").lower():
+            return icon
+    return ICON_MPRIS_DEFAULT
+
+
+def mpris_display_title(active: dict) -> str:
+    if active.get("artist"):
+        return f"{active['artist']} - {active['title']}"
+    return active["title"]
+
+
+class Renderer:
+    """Folds active-source dicts into waybar JSON with scroll + colors.
+
+    Holds scroll offset/hold state and the current track's color pair;
+    render() advances the scroll one step per call while the body
+    overflows SCROLL_WINDOW.
+    """
+
+    def __init__(self, choose=random.choice):
+        self.choose = choose
+        self.key = None
+        self.offset = 0
+        self.pause_ticks = 0
+        self.icon_color = COLORS[0]
+        self.text_color = COLORS[0]
+
+    def render(self, active: dict) -> dict:
+        if active["source"] == "idle":
+            self.key = None
+            return {"text": ICON_IDLE, "tooltip": "RadioBar: off",
+                    "class": "idle"}
+        if active["source"] == "radio":
+            body, subtitle = active["title"], active["station"]
+        else:
+            body = mpris_display_title(active)
+            subtitle = (active["player"] or "").capitalize()
+        key = (active["source"], active["player"], body)
+        if key != self.key:
+            self.key = key
+            self.offset = 0
+            self.pause_ticks = PAUSE_TICKS
+            self.icon_color = self.choose(COLORS)
+            self.text_color = self.choose(COLORS)
+        if len(body) > SCROLL_WINDOW:
+            shown = scroll_window(body, SCROLL_WINDOW, self.offset)
+            if self.pause_ticks > 0:
+                self.pause_ticks -= 1
+            else:
+                self.offset += 1
+                if self.offset >= len(body) + len(SCROLL_PAD):
+                    self.offset = 0
+                    self.pause_ticks = PAUSE_TICKS
+        else:
+            shown = body
+        if active["source"] == "radio":
+            icon = ICON_PLAY if active["playing"] else ICON_PAUSE
+            status = ""
+        else:
+            icon = player_icon(active["player"])
+            status = "" if active["playing"] else f" {ICON_MPRIS_PAUSED}"
+        text = (f"<span foreground='{self.icon_color}'>{icon}</span>{status} "
+                f"<span foreground='{self.text_color}'>"
+                f"{html.escape(shown, quote=False)}</span>")
+        return {"text": text, "tooltip": f"{body}\n{subtitle}",
+                "class": "playing" if active["playing"] else "paused",
+                "markup": "pango"}
+
+    def needs_tick(self) -> bool:
+        return self.key is not None and len(self.key[2]) > SCROLL_WINDOW
+
+
+IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,
+               "artist": None, "title": None, "art_url": None,
+               "station": None}
+
+
+def guard_action(prev_players: dict, players: dict,
+                 radio_playing: bool) -> bool:
+    """Edge-triggered: did some player just start playing over the radio?
+
+    Deliberately asymmetric with arbiter(): a titleless player turning
+    Playing still fires the guard here (the app IS audible, so radio
+    should pause) even though arbiter() filters titleless players from
+    what the bar displays.
+    """
+    if not radio_playing:
+        return False
+    for name, p in players.items():
+        if name.startswith("mpv"):
+            continue
+        if p.get("status") != "Playing":
+            continue
+        prev = prev_players.get(name)
+        if prev is None or prev.get("status") != "Playing":
+            return True
+    return False
+
+
+def arbiter(radio: dict, players: dict) -> dict:
+    """Pick the active source: Playing beats Paused, then recency (seq)."""
+    candidates = []
+    if radio.get("running"):
+        candidates.append({
+            "source": "radio", "player": None,
+            "playing": not radio.get("paused"),
+            "artist": None,
+            "title": pick_title(radio.get("icy"), radio.get("media"),
+                                radio.get("station", "")),
+            "art_url": None, "station": radio.get("station", ""),
+            "seq": radio.get("seq", 0),
+        })
+    for name, p in players.items():
+        if radio.get("running") and name.startswith("mpv"):
+            continue
+        if not p.get("title"):
+            continue
+        candidates.append({
+            "source": "mpris", "player": name,
+            "playing": p["status"] == "Playing",
+            "artist": p.get("artist"), "title": p["title"],
+            "art_url": p.get("art_url"), "station": None,
+            "seq": p.get("seq", 0),
+        })
+    if not candidates:
+        return dict(IDLE_ACTIVE)
+    best = max(candidates, key=lambda c: (c["playing"], c["seq"]))
+    best.pop("seq")
+    return best
+
+
+PLAYERCTL_FORMAT = ("{{playerName}}\t{{status}}\t{{artist}}\t{{title}}"
+                    "\t{{mpris:artUrl}}")
+
+
+def parse_playerctl_line(line: str):
+    """One playerctl --follow line -> (player, state) | (player, None) | None.
+
+    (player, None) means the player vanished or stopped and must be dropped.
+    None means the line is unusable and should be skipped entirely.
+    """
+    line = line.rstrip("\n")
+    if not line.strip():
+        return None
+    parts = line.split("\t")
+    if len(parts) != 5 or not parts[0]:
+        return None
+    name, status, artist, title, art_url = parts
+    if status not in ("Playing", "Paused"):
+        return (name, None)
+    return (name, {"status": status, "artist": artist or None,
+                   "title": title or None, "art_url": art_url or None})
+
+
+class StateStore:
+    """Thread-safe holder for radio + MPRIS player state.
+
+    Watcher threads mutate it; the render loop reads snapshots. Every
+    mutation stamps a monotonic seq (recency for the arbiter tie-break —
+    deliberately not wall-clock) and sets `changed`.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.changed = threading.Event()
+        self._radio = {"running": False}
+        self._players = {}
+        self._seq = 0
+
+    def set_radio(self, state: dict):
+        with self._lock:
+            unchanged = {k: v for k, v in self._radio.items() if k != "seq"}
+            if state == unchanged:
+                return
+            self._seq += 1
+            s = dict(state)
+            s["seq"] = self._seq
+            self._radio = s
+        self.changed.set()
+
+    def update_player(self, name: str, state):
+        with self._lock:
+            if state is None:
+                self._players.pop(name, None)
+            else:
+                self._seq += 1
+                s = dict(state)
+                s["seq"] = self._seq
+                self._players[name] = s
+        self.changed.set()
+
+    def snapshot(self):
+        with self._lock:
+            return (dict(self._radio),
+                    {k: dict(v) for k, v in self._players.items()})
+
+    def clear_players(self):
+        """Drop all MPRIS players (e.g. after a playerctl respawn gap, so
+        a player that vanished during the gap doesn't linger as a ghost
+        "Playing" entry owning the bar). No-op (changed left unset) if
+        already empty, mirroring set_radio's no-op latch."""
+        with self._lock:
+            if not self._players:
+                return
+            self._players = {}
+        self.changed.set()
 
 
 OBSERVED_PROPS = ["metadata/by-key/icy-title", "media-title", "pause"]
 
 
 class StatusTracker:
-    """Folds mpv property-change events into waybar output dicts."""
+    """Folds mpv property-change events into radio state dicts."""
 
     def __init__(self, station_name: str):
         self.station = station_name
@@ -360,12 +681,11 @@ class StatusTracker:
             self.paused = bool(data)
         else:
             return None
-        return self.output()
+        return self.state()
 
-    def output(self) -> dict:
-        return waybar_output(running=True, paused=self.paused,
-                             icy_title=self.icy, media_title=self.media,
-                             station_name=self.station)
+    def state(self) -> dict:
+        return {"running": True, "paused": self.paused, "icy": self.icy,
+                "media": self.media, "station": self.station}
 
 
 def socket_path() -> Path:
@@ -435,9 +755,23 @@ def launch_mpv(station: dict):
     write_last(station["name"])
 
 
-def cmd_toggle() -> int:
-    if ipc_command(["cycle", "pause"]) is not None:
+def pause_other_players(run=subprocess.run):
+    try:
+        run(["playerctl", "-a", "pause"], capture_output=True)
+    except OSError:
+        pass
+
+
+def cmd_toggle(run=subprocess.run) -> int:
+    resp = ipc_command(["get_property", "pause"])
+    if resp is not None:
+        if resp.get("data") is True:
+            pause_other_players(run)
+            ipc_command(["set_property", "pause", False])
+        else:
+            ipc_command(["set_property", "pause", True])
         return 0
+    pause_other_players(run)
     stations = load_stations()
     station = None
     last = read_last()
@@ -449,7 +783,7 @@ def cmd_toggle() -> int:
     return 0
 
 
-def cmd_play(arg: str) -> int:
+def cmd_play(arg: str, run=subprocess.run) -> int:
     if arg.lower().startswith(("http://", "https://")):
         station = {"name": arg, "streamURL": arg, "genre": "", "websiteURL": None}
     else:
@@ -457,6 +791,7 @@ def cmd_play(arg: str) -> int:
         if station is None:
             print(f"radiobar: unknown station: {arg}", file=sys.stderr)
             return 1
+    pause_other_players(run)
     ipc_command(["quit"])
     launch_mpv(station)
     return 0
@@ -480,11 +815,16 @@ def cmd_menu(run=subprocess.run) -> int:
             pass
         return 1
     stations = load_stations()
-    names = "\n".join(s["name"] for s in stations) + "\n"
-    result = run(menu, input=names, capture_output=True, text=True)
+    names = [s["name"] for s in stations]
+    if ipc_command(["get_property", "pause"]) is not None:
+        names.insert(0, STOP_ENTRY)
+    result = run(menu, input="\n".join(names) + "\n",
+                 capture_output=True, text=True)
     choice = result.stdout.strip()
     if not choice:
         return 0
+    if choice == STOP_ENTRY:
+        return cmd_stop()
     rc = cmd_play(choice)
     if rc != 0:
         try:
@@ -500,18 +840,97 @@ def cmd_stop() -> int:
     return 0
 
 
+def _mpris_control(action: str, run) -> int:
+    active = read_active()
+    if not (active and active.get("source") == "mpris"
+            and active.get("player")):
+        return 0
+    try:
+        run(["playerctl", "-p", active["player"], action],
+            capture_output=True)
+    except OSError:
+        return 1
+    return 0
+
+
+def cmd_click(run=subprocess.run) -> int:
+    active = read_active()
+    if active and active.get("source") == "mpris" and active.get("player"):
+        return _mpris_control("play-pause", run)
+    return cmd_toggle()
+
+
+def cmd_prev(run=subprocess.run) -> int:
+    return _mpris_control("previous", run)
+
+
+def cmd_next(run=subprocess.run) -> int:
+    return _mpris_control("next", run)
+
+
 def emit(d: dict):
     print(json.dumps(d, separators=(",", ":")), flush=True)
 
 
-def watch(sock, worker=None):
-    """Observe mpv properties on an open socket; emit bar updates until it closes."""
+class NowPlaying:
+    """Render loop: guard -> arbiter -> emit; side effects on track change."""
+
+    def __init__(self, store, worker, renderer=None, emit_fn=emit,
+                 ipc=ipc_command, write_active_fn=write_active):
+        self.store = store
+        self.worker = worker
+        self.renderer = renderer or Renderer()
+        self.emit = emit_fn
+        self.ipc = ipc
+        self.write_active = write_active_fn
+        self.prev_players = {}
+        self.last_identity = None
+
+    def tick(self):
+        radio, players = self.store.snapshot()
+        radio_playing = bool(radio.get("running")) and not radio.get("paused")
+        if guard_action(self.prev_players, players, radio_playing):
+            self.ipc(["set_property", "pause", True])
+            radio = dict(radio)
+            radio["paused"] = True  # reflect before mpv's event round-trips
+        self.prev_players = players
+        active = arbiter(radio, players)
+        self.emit(self.renderer.render(active))
+        identity = (active["source"], active["player"], active["artist"],
+                    active["title"], active["art_url"])
+        if identity == self.last_identity:
+            return
+        self.last_identity = identity
+        self.write_active(active)
+        if active["source"] == "idle":
+            self.worker.clear()
+        elif active["source"] == "radio":
+            self.worker.track_changed(active["title"], active["station"])
+        else:
+            self.worker.track_changed(mpris_display_title(active),
+                                      (active["player"] or "").capitalize(),
+                                      active["art_url"] or "")
+
+    def run(self, max_ticks=None):
+        """Blocking loop; `max_ticks` bounds iterations (tests only) —
+        None means forever, matching production (cmd_status) behavior."""
+        self.tick()
+        ticks = 1
+        while max_ticks is None or ticks < max_ticks:
+            timeout = TICK_SECONDS if self.renderer.needs_tick() else None
+            self.store.changed.wait(timeout=timeout)
+            self.store.changed.clear()
+            self.tick()
+            ticks += 1
+
+
+def watch(sock, store):
+    """Observe mpv properties on an open socket; feed the store until close."""
     tracker = StatusTracker(read_last() or "")
     for i, prop in enumerate(OBSERVED_PROPS, start=1):
         sock.sendall(json.dumps({"command": ["observe_property", i, prop]})
                      .encode() + b"\n")
-    emit(tracker.output())
-    last_track = None
+    store.set_radio(tracker.state())
     buf = b""
     while True:
         chunk = sock.recv(4096)
@@ -524,40 +943,102 @@ def watch(sock, worker=None):
                 ev = json.loads(line)
             except ValueError:
                 continue
-            out = tracker.handle_event(ev)
-            if out is not None:
-                emit(out)
-                if worker is not None:
-                    current = pick_title(tracker.icy, tracker.media,
-                                         tracker.station)
-                    if current != last_track:
-                        last_track = current
-                        worker.track_changed(current, tracker.station)
+            state = tracker.handle_event(ev)
+            if state is not None:
+                store.set_radio(state)
 
 
-def cmd_status() -> int:
-    worker = ArtworkWorker()
+PLAYERCTL_CMD = ["playerctl", "--all-players", "--follow", "metadata",
+                 "--format", PLAYERCTL_FORMAT]
+
+
+def _pdeathsig_preexec():
+    """Ask the kernel to SIGTERM this child if radiobar itself dies.
+
+    Otherwise a `playerctl --follow` child survives its parent as an
+    orphan, and orphans accumulate across waybar restarts. Best-effort:
+    a failure here must never block the spawn. Catch-all is deliberate:
+    any failure here must be swallowed — subprocess would otherwise
+    re-raise it as SubprocessError and kill the watcher thread (ctypes
+    lookups can raise AttributeError as well as OSError).
+    """
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        # PR_SET_PDEATHSIG = 1; prctl(2) takes five args — pass explicit
+        # zeros for the unused ones rather than relying on the variadic
+        # glibc wrapper forwarding garbage registers the kernel ignores.
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+    except Exception:
+        pass
+
+
+class MprisSource:
+    """Feeds MPRIS player state into the store from playerctl --follow."""
+
+    def __init__(self, store, popen=subprocess.Popen, sleep=time.sleep):
+        self.store = store
+        self.popen = popen
+        self.sleep = sleep
+
+    def run(self):
+        while True:
+            try:
+                proc = self.popen(PLAYERCTL_CMD, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True,
+                                  preexec_fn=_pdeathsig_preexec)
+            except (FileNotFoundError, PermissionError):
+                print("radiobar: playerctl unavailable (not found or not "
+                      "executable) — MPRIS sources disabled", file=sys.stderr)
+                return
+            except OSError:
+                # Spawn failed: any players fed by a prior run are now
+                # stale (we can't know if they're still alive) — drop them
+                # rather than let a ghost "Playing" entry own the bar.
+                self.store.clear_players()
+                self.sleep(2)
+                continue
+            for line in proc.stdout:
+                parsed = parse_playerctl_line(line)
+                if parsed is not None:
+                    self.store.update_player(*parsed)
+            # The follow stream stopped being live (EOF) — players that
+            # vanished during the gap before we respawn must not linger.
+            self.store.clear_players()
+            proc.wait()
+            self.sleep(2)
+
+
+def radio_watcher(store):
+    """Reconnect loop feeding mpv events into the store."""
     while True:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             s.connect(str(socket_path()))
         except OSError:
             s.close()
-            emit(waybar_output(running=False))
+            store.set_radio({"running": False})
             time.sleep(2)
             continue
         try:
-            watch(s, worker=worker)
+            watch(s, store)
         except OSError:
             pass
         finally:
             s.close()
-        worker.clear()
-        emit(waybar_output(running=False))
+        store.set_radio({"running": False})
         time.sleep(2)
 
 
-USAGE = "usage: radiobar status|toggle|play <name-or-url>|stop|menu"
+def cmd_status() -> int:
+    store = StateStore()
+    threading.Thread(target=radio_watcher, args=(store,),
+                     daemon=True).start()
+    threading.Thread(target=MprisSource(store).run, daemon=True).start()
+    NowPlaying(store, ArtworkWorker()).run()
+    return 0
+
+
+USAGE = "usage: radiobar status|toggle|play <name-or-url>|stop|menu|click|prev|next"
 
 
 def main(argv) -> int:
@@ -578,6 +1059,12 @@ def main(argv) -> int:
         return cmd_stop()
     if cmd == "menu":
         return cmd_menu()
+    if cmd == "click":
+        return cmd_click()
+    if cmd == "prev":
+        return cmd_prev()
+    if cmd == "next":
+        return cmd_next()
     print(USAGE, file=sys.stderr)
     return 2
 

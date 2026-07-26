@@ -7,6 +7,7 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 
@@ -21,6 +22,103 @@ def _load():
 
 
 rb = _load()
+
+
+def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify"):
+    return {"source": "mpris", "player": player, "playing": playing,
+            "artist": artist, "title": title, "art_url": None,
+            "station": None}
+
+
+def _radio_active(playing=True, title="A - B", station="FIP"):
+    return {"source": "radio", "player": None, "playing": playing,
+            "artist": None, "title": title, "art_url": None,
+            "station": station}
+
+
+class TestScrollWindow:
+    def test_wraps_with_pad(self):
+        text = "0123456789"  # len 10, window 6
+        assert rb.scroll_window(text, 6, 0) == "012345"
+        # offset 8: chars 8,9 then the pad begins
+        assert rb.scroll_window(text, 6, 8) == "89" + rb.SCROLL_PAD[:4]
+        # offset wraps modulo len(text) + len(pad) = 17
+        assert rb.scroll_window(text, 6, 17) == rb.scroll_window(text, 6, 0)
+
+
+class TestPlayerIcon:
+    def test_known_players(self):
+        assert rb.player_icon("spotify") == rb.PLAYER_ICONS["spotify"]
+        assert rb.player_icon("de.haeckerfelix.shortwave") == \
+            rb.PLAYER_ICONS["de.haeckerfelix.shortwave"]
+
+    def test_substring_match_and_fallback(self):
+        assert rb.player_icon("spotify.instance42") == rb.PLAYER_ICONS["spotify"]
+        assert rb.player_icon("firefox") == rb.ICON_MPRIS_DEFAULT
+        assert rb.player_icon(None) == rb.ICON_MPRIS_DEFAULT
+
+
+class TestRenderer:
+    def _renderer(self):
+        return rb.Renderer(choose=lambda colors: colors[0])
+
+    def test_idle(self):
+        out = self._renderer().render(dict(rb.IDLE_ACTIVE))
+        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
+
+    def test_mpris_playing_has_icons_colors_and_tooltip(self):
+        out = self._renderer().render(_mpris_active())
+        assert out["class"] == "playing" and out["markup"] == "pango"
+        assert rb.PLAYER_ICONS["spotify"] in out["text"]
+        assert rb.COLORS[0] in out["text"]
+        assert "Ar - Ti" in out["text"]
+        assert out["tooltip"] == "Ar - Ti\nSpotify"
+
+    def test_mpris_paused_appends_status_icon(self):
+        out = self._renderer().render(_mpris_active(playing=False))
+        assert out["class"] == "paused"
+        assert rb.ICON_MPRIS_PAUSED in out["text"]
+
+    def test_radio_uses_play_pause_icon_only(self):
+        r = self._renderer()
+        out = r.render(_radio_active(playing=True))
+        assert rb.ICON_PLAY in out["text"] and out["class"] == "playing"
+        assert rb.ICON_MPRIS_PAUSED not in out["text"]
+        out = r.render(_radio_active(playing=False))
+        assert rb.ICON_PAUSE in out["text"] and out["class"] == "paused"
+        assert out["tooltip"] == "A - B\nFIP"
+
+    def test_short_title_no_tick_needed(self):
+        r = self._renderer()
+        r.render(_mpris_active())
+        assert r.needs_tick() is False
+
+    def test_long_title_scrolls_after_pause(self):
+        r = self._renderer()
+        long = _mpris_active(artist=None, title="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef")
+        r.render(long)
+        assert r.needs_tick() is True
+        # first PAUSE_TICKS renders hold the window at offset 0
+        first = r.render(long)["text"]
+        for _ in range(rb.PAUSE_TICKS - 1):
+            held = r.render(long)["text"]
+        assert held == first
+        moved = r.render(long)["text"]
+        assert moved != first
+
+    def test_track_change_resets_scroll_and_recolors(self):
+        picks = iter(rb.COLORS)
+        r = rb.Renderer(choose=lambda colors: next(picks))
+        a = r.render(_mpris_active(title="x" * 40))
+        b = r.render(_mpris_active(title="y" * 40))  # new track
+        # colors advanced: 2 picks per track with our fake chooser
+        assert rb.COLORS[0] in a["text"] and rb.COLORS[2] in b["text"]
+
+    def test_pango_special_chars_escaped(self):
+        out = self._renderer().render(
+            _mpris_active(artist="Simon & Garfunkel", title="<Sound>"))
+        assert "&amp;" in out["text"] and "&lt;Sound&gt;" in out["text"]
+        assert "Simon & Garfunkel" in out["tooltip"]  # tooltip unescaped
 
 
 class TestLoadStations:
@@ -74,16 +172,6 @@ class TestFindStation:
         assert rb.find_station(rb.BUILTIN_STATIONS, "Nope FM") is None
 
 
-class TestTruncate:
-    def test_short_unchanged(self):
-        assert rb.truncate("abc") == "abc"
-
-    def test_long_gets_ellipsis_within_limit(self):
-        out = rb.truncate("x" * 60)
-        assert len(out) == rb.TITLE_LIMIT
-        assert out.endswith("…")
-
-
 class TestPickTitle:
     def test_icy_wins(self):
         assert rb.pick_title("A - B", "media", "St") == "A - B"
@@ -99,69 +187,41 @@ class TestPickTitle:
         assert rb.pick_title("  ", "", "St") == "St"
 
 
-class TestWaybarOutput:
-    def test_idle(self):
-        out = rb.waybar_output(running=False)
-        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
-
-    def test_paused_shows_station(self):
-        out = rb.waybar_output(running=True, paused=True, station_name="FIP")
-        assert out["class"] == "paused"
-        assert out["text"] == f"{rb.ICON_PAUSE} FIP"
-
-    def test_playing_shows_title_and_tooltip(self):
-        out = rb.waybar_output(running=True, icy_title="Artist - Song",
-                               station_name="KEXP 90.3 FM")
-        assert out["class"] == "playing"
-        assert out["text"] == f"{rb.ICON_PLAY} Artist - Song"
-        assert "Artist - Song" in out["tooltip"]
-        assert "KEXP 90.3 FM" in out["tooltip"]
-
-    def test_playing_long_title_truncated_in_text_not_tooltip(self):
-        long_title = "The Extraordinarily Long Band Name - An Even Longer Song Title"
-        out = rb.waybar_output(running=True, icy_title=long_title,
-                               station_name="NTS Radio 1")
-        assert len(out["text"]) <= len(rb.ICON_PLAY) + 1 + rb.TITLE_LIMIT
-        assert long_title in out["tooltip"]
-
-
 class TestStatusTracker:
-    def test_initial_output_is_playing_station_name(self):
+    def test_initial_state(self):
         t = rb.StatusTracker("FIP")
-        out = t.output()
-        assert out["class"] == "playing" and "FIP" in out["text"]
+        assert t.state() == {"running": True, "paused": False, "icy": None,
+                             "media": None, "station": "FIP"}
 
-    def test_icy_title_event_updates_text(self):
+    def test_icy_title_event_updates_state(self):
         t = rb.StatusTracker("FIP")
         out = t.handle_event({"event": "property-change",
                               "name": "metadata/by-key/icy-title",
                               "data": "Air - La Femme d'Argent"})
-        assert out is not None
-        assert "Air - La Femme d'Argent" in out["text"]
+        assert out["icy"] == "Air - La Femme d'Argent"
 
     def test_pause_event_switches_state(self):
         t = rb.StatusTracker("FIP")
-        t.handle_event({"event": "property-change",
-                        "name": "metadata/by-key/icy-title", "data": "A - B"})
         out = t.handle_event({"event": "property-change",
                               "name": "pause", "data": True})
-        assert out["class"] == "paused"
+        assert out["paused"] is True
         out = t.handle_event({"event": "property-change",
                               "name": "pause", "data": False})
-        assert out["class"] == "playing" and "A - B" in out["text"]
+        assert out["paused"] is False
 
     def test_irrelevant_events_return_none(self):
         t = rb.StatusTracker("FIP")
         assert t.handle_event({"event": "playback-restart"}) is None
         assert t.handle_event({"request_id": 1, "error": "success"}) is None
 
-    def test_null_icy_data_falls_back(self):
+    def test_null_icy_data_clears(self):
         t = rb.StatusTracker("FIP")
         t.handle_event({"event": "property-change",
                         "name": "metadata/by-key/icy-title", "data": "A - B"})
         out = t.handle_event({"event": "property-change",
-                              "name": "metadata/by-key/icy-title", "data": None})
-        assert "FIP" in out["text"]
+                              "name": "metadata/by-key/icy-title",
+                              "data": None})
+        assert out["icy"] is None
 
 
 class TestLastStation:
@@ -252,31 +312,58 @@ class TestIpcCommand:
 
 
 class TestToggle:
-    def test_running_mpv_gets_cycle_pause(self, monkeypatch):
-        sent = []
-        monkeypatch.setattr(rb, "ipc_command",
-                            lambda args: sent.append(args) or {"error": "success"})
-        assert rb.cmd_toggle() == 0
-        assert sent == [["cycle", "pause"]]
+    def test_playing_radio_gets_paused_without_touching_others(self, monkeypatch):
+        sent, runs = [], []
+        monkeypatch.setattr(rb, "ipc_command", lambda args: sent.append(args)
+                            or {"error": "success", "data": False})
+        assert rb.cmd_toggle(run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert sent == [["get_property", "pause"],
+                        ["set_property", "pause", True]]
+        assert runs == []  # pausing radio must NOT playerctl-pause others
 
-    def test_cold_start_launches_last_station(self, tmp_path, monkeypatch):
+    def test_paused_radio_resume_pauses_others_first(self, monkeypatch):
+        sent, runs = [], []
+        monkeypatch.setattr(rb, "ipc_command", lambda args: sent.append(args)
+                            or {"error": "success", "data": True})
+        assert rb.cmd_toggle(run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert runs == [["playerctl", "-a", "pause"]]
+        assert sent == [["get_property", "pause"],
+                        ["set_property", "pause", False]]
+
+    def test_cold_start_pauses_others_and_launches_last(
+            self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
         rb.write_last("FIP")
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
-        launched = []
+        launched, runs = [], []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_toggle() == 0
+        assert rb.cmd_toggle(run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert runs == [["playerctl", "-a", "pause"]]
         assert launched[0]["name"] == "FIP"
 
-    def test_cold_start_no_history_uses_first_station(self, tmp_path, monkeypatch):
+    def test_cold_start_no_history_uses_first_station(
+            self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         launched = []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_toggle() == 0
+        assert rb.cmd_toggle(run=lambda cmd, **k: None) == 0
         assert launched[0]["name"] == rb.BUILTIN_STATIONS[0]["name"]
+
+    def test_missing_playerctl_does_not_break_toggle(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        launched = []
+        monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
+
+        def run(cmd, **k):
+            raise FileNotFoundError("playerctl")
+        assert rb.cmd_toggle(run=run) == 0
+        assert launched
 
 
 class TestPlay:
@@ -285,7 +372,9 @@ class TestPlay:
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         launched = []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_play("fip") == 0
+        runs = []
+        assert rb.cmd_play("fip", run=lambda cmd, **k: runs.append(cmd)) == 0
+        assert runs == [["playerctl", "-a", "pause"]]
         assert launched[0]["name"] == "FIP"
 
     def test_raw_url(self, tmp_path, monkeypatch):
@@ -293,12 +382,13 @@ class TestPlay:
         monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         launched = []
         monkeypatch.setattr(rb, "launch_mpv", lambda st: launched.append(st))
-        assert rb.cmd_play("https://example.com/stream.mp3") == 0
+        assert rb.cmd_play("https://example.com/stream.mp3",
+                           run=lambda cmd, **k: None) == 0
         assert launched[0]["streamURL"] == "https://example.com/stream.mp3"
 
     def test_unknown_name_errors(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
-        assert rb.cmd_play("Nope FM") == 1
+        assert rb.cmd_play("Nope FM", run=lambda cmd, **k: None) == 1
         assert "unknown station" in capsys.readouterr().err
 
 
@@ -341,12 +431,11 @@ class TestEmit:
 
 
 class TestWatch:
-    def test_observes_props_emits_updates_and_raises_on_close(
-            self, tmp_path, monkeypatch, capsys):
+    def test_observes_props_feeds_store_and_raises_on_close(
+            self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
         rb.write_last("FIP")
         sock_path = tmp_path / "radiobar.sock"
-
         received = []
 
         class Handler(socketserver.StreamRequestHandler):
@@ -356,28 +445,201 @@ class TestWatch:
                 ev = {"event": "property-change",
                       "name": "metadata/by-key/icy-title", "data": "A - B"}
                 self.wfile.write(json.dumps(ev).encode() + b"\n")
-                # then close the connection → watch must raise OSError
 
         server = socketserver.UnixStreamServer(str(sock_path), Handler)
         thread = threading.Thread(target=server.handle_request, daemon=True)
         thread.start()
-
         import socket as socket_mod
         client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
         client.connect(str(sock_path))
+        store = rb.StateStore()
         try:
             import pytest
             with pytest.raises(OSError):
-                rb.watch(client)
+                rb.watch(client, store)
         finally:
             client.close()
             thread.join(timeout=5)
             server.server_close()
-
         assert [r["command"][2] for r in received] == rb.OBSERVED_PROPS
-        lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
-        # initial state, then the icy-title update
-        assert any("A - B" in l["text"] for l in lines)
+        radio, _ = store.snapshot()
+        assert radio["running"] and radio["icy"] == "A - B"
+        assert radio["station"] == "FIP"
+
+
+class _FakeProc:
+    def __init__(self, lines, on_wait=None):
+        import io
+        self.stdout = io.StringIO("".join(lines))
+        self.wait_calls = 0
+        self._on_wait = on_wait
+
+    def wait(self):
+        self.wait_calls += 1
+        if self._on_wait:
+            self._on_wait()
+        return 0
+
+
+class _StopLoop(Exception):
+    pass
+
+
+class TestMprisSource:
+    def test_lines_feed_store_then_respawn_then_disabled(self, capsys):
+        store = rb.StateStore()
+        spawns = []
+        order = []
+
+        def popen(cmd, **kwargs):
+            spawns.append(cmd)
+            if len(spawns) == 1:
+                # firefox is fed Playing (and would otherwise survive);
+                # spotify is fed Playing then Stopped and must be dropped.
+                return _FakeProc(
+                    ["firefox\tPlaying\tAr\tTi\turl\n",
+                     "spotify\tPlaying\tA2\tT2\t\n",
+                     "spotify\tStopped\t\t\t\n"],
+                    on_wait=lambda: order.append("wait"))
+            raise FileNotFoundError("playerctl")
+
+        def sleep(s):
+            order.append(("sleep", s))
+
+        rb.MprisSource(store, popen=popen, sleep=sleep).run()
+        assert spawns[0] == rb.PLAYERCTL_CMD
+        assert len(spawns) == 2      # EOF → respawn attempt
+        # proc.wait() must happen before the respawn sleep.
+        assert order == ["wait", ("sleep", 2)]
+        # EOF clears ALL players (not just the dropped one): firefox was
+        # still "Playing" in the feed, but a stale ghost surviving the
+        # respawn gap would wrongly keep owning the bar. clear_players()
+        # fires before proc.wait()/the retry sleep, so nothing lingers.
+        _, players = store.snapshot()
+        assert players == {}
+        assert "playerctl" in capsys.readouterr().err
+
+    def test_oserror_spawn_retries(self):
+        store = rb.StateStore()
+        attempts = []
+
+        def popen(cmd, **kwargs):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise OSError("busy")
+            raise _StopLoop()
+
+        def sleep(s):
+            pass
+
+        import pytest
+        with pytest.raises(_StopLoop):
+            rb.MprisSource(store, popen=popen, sleep=sleep).run()
+        assert len(attempts) == 3
+
+    def test_permission_error_disables_like_missing_binary(self, capsys):
+        store = rb.StateStore()
+
+        def popen(cmd, **kwargs):
+            raise PermissionError("playerctl")
+
+        rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
+        assert "playerctl" in capsys.readouterr().err
+
+    def test_spawns_with_parent_death_signal(self):
+        # A playerctl --follow child must not outlive radiobar as an
+        # orphan across waybar restarts — verify the popen call asks
+        # the kernel to signal it via a preexec_fn.
+        store = rb.StateStore()
+        calls = []
+
+        def popen(cmd, **kwargs):
+            calls.append(kwargs)
+            raise _StopLoop()
+
+        import pytest
+        with pytest.raises(_StopLoop):
+            rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
+        assert len(calls) == 1
+        assert callable(calls[0].get("preexec_fn"))
+        assert calls[0]["preexec_fn"] is rb._pdeathsig_preexec
+
+    def test_pdeathsig_preexec_swallows_missing_symbol(self, monkeypatch):
+        # ctypes.CDLL(...).prctl raises AttributeError when the symbol is
+        # missing — not an OSError — and subprocess re-raises any preexec_fn
+        # exception as SubprocessError, which would kill the MPRIS watcher
+        # thread. The helper must swallow this too.
+        class _FakeLib:
+            def prctl(self, *a, **kw):
+                raise AttributeError("no prctl")
+
+        def fake_cdll(name, use_errno=True):
+            return _FakeLib()
+
+        monkeypatch.setattr(rb.ctypes, "CDLL", fake_cdll)
+        rb._pdeathsig_preexec()  # must not raise
+
+
+class TestRadioWatcher:
+    def test_disconnected_sets_idle_radio_state(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RADIOBAR_SOCK", str(tmp_path / "nonexistent.sock"))
+        store = rb.StateStore()
+        calls = []
+
+        class _Stop(Exception):
+            pass
+
+        def fake_sleep(s):
+            calls.append(s)
+            raise _Stop()
+
+        monkeypatch.setattr(rb.time, "sleep", fake_sleep)
+
+        import pytest
+        with pytest.raises(_Stop):
+            rb.radio_watcher(store)
+        assert calls == [2]
+        radio, _ = store.snapshot()
+        assert radio["running"] is False
+
+
+class TestCmdStatus:
+    def test_starts_two_daemon_threads_and_runs_render_loop(self, monkeypatch):
+        threads = []
+
+        class FakeThread:
+            def __init__(self, target=None, args=(), kwargs=None,
+                        daemon=None):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                threads.append(self)
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(rb.threading, "Thread", FakeThread)
+
+        ran = []
+        stores_seen = []
+
+        class FakeNowPlaying:
+            def __init__(self, store, worker):
+                stores_seen.append(store)
+
+            def run(self):
+                ran.append(True)
+
+        monkeypatch.setattr(rb, "NowPlaying", FakeNowPlaying)
+
+        assert rb.cmd_status() == 0
+        assert len(threads) == 2
+        assert all(t.daemon is True for t in threads)
+        assert threads[0].target is rb.radio_watcher
+        assert threads[0].args == (stores_seen[0],)
+        assert threads[1].target.__func__ is rb.MprisSource.run
+        assert threads[1].target.__self__.store is stores_seen[0]
+        assert ran == [True]
 
 
 class TestMainDispatch:
@@ -425,6 +687,7 @@ class TestCmdMenu:
 
     def test_selection_is_played(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         played = []
         monkeypatch.setattr(rb, "cmd_play", lambda name: played.append(name) or 0)
         monkeypatch.setattr(rb, "find_menu_cmd",
@@ -437,6 +700,7 @@ class TestCmdMenu:
 
     def test_empty_selection_is_noop(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         played = []
         monkeypatch.setattr(rb, "cmd_play", lambda name: played.append(name) or 0)
         monkeypatch.setattr(rb, "find_menu_cmd",
@@ -446,6 +710,7 @@ class TestCmdMenu:
         assert played == []
 
     def test_no_menu_tool_notifies_and_fails(self, monkeypatch):
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "find_menu_cmd", lambda which=None: None)
         notified = []
         run, _ = self._fake_run("")
@@ -458,6 +723,7 @@ class TestCmdMenu:
 
     def test_unknown_choice_notifies_and_returns_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "cmd_play", lambda name: 1)
         monkeypatch.setattr(rb, "find_menu_cmd",
                             lambda which=None: ["walker", "--dmenu"])
@@ -466,6 +732,29 @@ class TestCmdMenu:
         assert any(c[0][0] == "notify-send" for c in calls)
         notify_call = next(c for c in calls if c[0][0] == "notify-send")
         assert "Nope FM" in notify_call[0][2]
+
+    def test_stop_entry_offered_and_dispatches_when_radio_running(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command",
+                            lambda args: {"error": "success", "data": False})
+        stopped = []
+        monkeypatch.setattr(rb, "cmd_stop", lambda: stopped.append(1) or 0)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, calls = self._fake_run(rb.STOP_ENTRY + "\n")
+        assert rb.cmd_menu(run=run) == 0
+        assert stopped == [1]
+        assert calls[0][1]["input"].startswith(rb.STOP_ENTRY + "\n")
+
+    def test_no_stop_entry_when_radio_stopped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
+        monkeypatch.setattr(rb, "find_menu_cmd",
+                            lambda which=None: ["walker", "--dmenu"])
+        run, calls = self._fake_run("")
+        assert rb.cmd_menu(run=run) == 0
+        assert rb.STOP_ENTRY not in calls[0][1]["input"]
 
 
 class TestParseItunesResponse:
@@ -625,6 +914,151 @@ class TestArtCache:
         assert rb.cached_track_info("Some Title") is None
 
 
+class TestFindDownscaler:
+    def test_prefers_magick_then_convert_then_ffmpeg(self):
+        which = lambda n: "/usr/bin/" + n
+        assert rb.find_downscaler(which)("in.jpg", "out.jpg")[0] == "magick"
+        which = lambda n: None if n == "magick" else "/usr/bin/" + n
+        assert rb.find_downscaler(which)("in.jpg", "out.jpg")[0] == "convert"
+        which = lambda n: "/usr/bin/ffmpeg" if n == "ffmpeg" else None
+        argv = rb.find_downscaler(which)("in.jpg", "out.jpg")
+        assert argv[0] == "ffmpeg" and "out.jpg" in argv
+        # Both axes must be bounded at 128 — scale=min(128,iw):-2 only
+        # capped width, letting portrait art (e.g. 600x1200) downscale to
+        # 128x256 and breach the "never publish >128px to the bar"
+        # invariant (waybar 0.15 freezes the bar on oversized images).
+        assert argv[argv.index("-vf") + 1] == \
+            "scale=128:128:force_original_aspect_ratio=decrease"
+
+    def test_none_when_no_tool(self):
+        assert rb.find_downscaler(lambda n: None) is None
+
+
+class TestFetchMprisArt:
+    def _run_ok(self, calls):
+        def run(argv, **kwargs):
+            calls.append(argv)
+            Path(argv[-1]).write_bytes(b"SMALL")
+
+            class R:
+                returncode = 0
+            return R()
+        return run
+
+    def test_https_download_and_downscale(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+        calls = []
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=self._run_ok(calls),
+                                  which=lambda n: "/usr/bin/" + n)
+        assert info["found"] and info["year"] is None
+        assert Path(info["jpg"]).read_bytes() == b"BIGIMG"
+        assert Path(info["jpg_small"]).read_bytes() == b"SMALL"
+        assert calls and calls[0][0] == "magick"
+
+    def test_no_downscaler_skips_bar_art_keeps_notification_art(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=lambda *a, **k: None,
+                                  which=lambda n: None)
+        assert info["found"] and info["jpg"] is not None
+        assert info["jpg_small"] is None  # never risk the waybar freeze
+
+    def test_file_url_is_copied(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        src = tmp_path / "local art.jpg"
+        src.write_bytes(b"LOCAL")
+        url = "file://" + urllib.parse.quote(str(src))
+        info = rb.fetch_mpris_art(url, urlopen=None,
+                                  run=lambda *a, **k: None,
+                                  which=lambda n: None)
+        assert info["found"] and Path(info["jpg"]).read_bytes() == b"LOCAL"
+
+    def test_unsupported_or_failed_is_cached_miss(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        info = rb.fetch_mpris_art("", urlopen=None,
+                                  run=lambda *a, **k: None,
+                                  which=lambda n: None)
+        assert info == {"year": None, "found": False,
+                        "jpg": None, "jpg_small": None}
+        fake = _FakeHTTP({"i.scdn.co": OSError("down")})
+        rb.fetch_mpris_art("https://i.scdn.co/x", urlopen=fake,
+                           run=lambda *a, **k: None, which=lambda n: None)
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_mpris_art("https://i.scdn.co/x", urlopen=fake2,
+                                   run=lambda *a, **k: None,
+                                   which=lambda n: None)
+        assert again["found"] is False and fake2.calls == []
+
+    def test_cached_hit_skips_network(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+        calls = []
+        rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                           run=self._run_ok(calls),
+                           which=lambda n: "/usr/bin/" + n)
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_mpris_art("https://i.scdn.co/image/abc",
+                                   urlopen=fake2, run=lambda *a, **k: None,
+                                   which=lambda n: None)
+        assert again["found"] and fake2.calls == []
+
+    def test_failed_downscale_does_not_poison_cache(self, tmp_path,
+                                                    monkeypatch):
+        # The downscaler writes partial bytes to its destination argv path
+        # but reports failure; a corrupt file at the final jpg_small path
+        # would later be published to waybar's image module unguarded.
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+
+        def run(argv, **kwargs):
+            Path(argv[-1]).write_bytes(b"PARTIAL")
+
+            class R:
+                returncode = 1
+            return R()
+
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=run, which=lambda n: "/usr/bin/" + n)
+        assert info["jpg_small"] is None
+        jpg, jpg_small, _ = rb.art_cache_paths("https://i.scdn.co/image/abc")
+        assert not jpg_small.exists()
+
+        fake2 = _FakeHTTP({})
+        again = rb.fetch_mpris_art("https://i.scdn.co/image/abc",
+                                   urlopen=fake2, run=lambda *a, **k: None,
+                                   which=lambda n: None)
+        assert again["jpg_small"] is None and fake2.calls == []
+
+    def test_downscaler_raises_keeps_full_image_no_small(self, tmp_path,
+                                                          monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"i.scdn.co": b"BIGIMG"})
+
+        def raising_run(argv, **kwargs):
+            raise OSError("tool vanished")
+
+        info = rb.fetch_mpris_art("https://i.scdn.co/image/abc", urlopen=fake,
+                                  run=raising_run,
+                                  which=lambda n: "/usr/bin/" + n)
+        assert info["jpg_small"] is None
+        assert info["jpg"] is not None
+        assert Path(info["jpg"]).read_bytes() == b"BIGIMG"
+
+
+class TestFetchTrackArtDispatch:
+    def test_none_art_url_uses_itunes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CACHE_DIR", str(tmp_path))
+        fake = _FakeHTTP({"itunes.apple.com":
+                          json.dumps({"results": []}).encode()})
+        info = rb.fetch_track_art("A - B", urlopen=fake)
+        assert info["found"] is False
+        assert any("itunes.apple.com" in u for u in fake.calls)
+
+
 class TestPublishArt:
     def test_copies_and_signals(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_ART_PATH", str(tmp_path / "art.png"))
@@ -701,7 +1135,7 @@ class TestArtworkWorker:
     def _worker(self, fetched, jobs=None):
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: fetched,
+            fetch_fn=lambda t, art_url=None: fetched,
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=(jobs.append if jobs is not None else (lambda fn: fn())))
@@ -737,10 +1171,12 @@ class TestArtworkWorker:
 
     def test_fetch_exception_swallowed_and_slot_released(self):
         jobs = []
-        w = rb.ArtworkWorker(fetch_fn=lambda t: (_ for _ in ()).throw(RuntimeError()),
-                             publish_fn=lambda jpg: None,
-                             notify_fn=lambda *a: None,
-                             spawn=jobs.append)
+        w = rb.ArtworkWorker(
+            fetch_fn=lambda t, art_url=None: (_ for _ in ()).throw(
+                RuntimeError()),
+            publish_fn=lambda jpg: None,
+            notify_fn=lambda *a: None,
+            spawn=jobs.append)
         w.track_changed("A - B", "FIP")
         jobs[0]()  # must not raise
         assert "A - B" not in w.in_flight
@@ -761,7 +1197,7 @@ class TestArtworkWorker:
         }
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: fetched[t],
+            fetch_fn=lambda t, art_url=None: fetched[t],
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=jobs.append)
@@ -780,7 +1216,7 @@ class TestArtworkWorker:
         jobs = []
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg",
+            fetch_fn=lambda t, art_url=None: {"year": 1990, "found": True, "jpg": "/a.jpg",
                                 "jpg_small": "/a-small.jpg"},
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
@@ -807,7 +1243,7 @@ class TestArtworkWorker:
         }
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: fetched[t],
+            fetch_fn=lambda t, art_url=None: fetched[t],
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
             spawn=jobs.append)
@@ -826,7 +1262,7 @@ class TestArtworkWorker:
         jobs = []
         events = {"published": [], "notified": []}
         w = rb.ArtworkWorker(
-            fetch_fn=lambda t: {"year": 1990, "found": True, "jpg": "/a.jpg",
+            fetch_fn=lambda t, art_url=None: {"year": 1990, "found": True, "jpg": "/a.jpg",
                                 "jpg_small": "/a-small.jpg"},
             publish_fn=lambda jpg: events["published"].append(jpg),
             notify_fn=lambda *a: events["notified"].append(a),
@@ -839,44 +1275,6 @@ class TestArtworkWorker:
         jobs[0]()  # A's original job runs now; A is current again
         assert events["published"] == [None, "/a-small.jpg"]
         assert events["notified"] == [("A - B", "FIP", 1990, "/a.jpg")]
-
-
-class TestWatchArtworkHook:
-    def test_title_transition_calls_worker(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("RADIOBAR_STATE_DIR", str(tmp_path))
-        rb.write_last("FIP")
-        seen = []
-
-        class W:
-            def track_changed(self, title, station):
-                seen.append((title, station))
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self):
-                for _ in rb.OBSERVED_PROPS:
-                    self.rfile.readline()
-                for title in ("A - B", "A - B", "C - D"):
-                    ev = {"event": "property-change",
-                          "name": "metadata/by-key/icy-title", "data": title}
-                    self.wfile.write(json.dumps(ev).encode() + b"\n")
-
-        sock_path = tmp_path / "radiobar.sock"
-        server = socketserver.UnixStreamServer(str(sock_path), Handler)
-        thread = threading.Thread(target=server.handle_request, daemon=True)
-        thread.start()
-        import socket as socket_mod
-        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
-        client.connect(str(sock_path))
-        try:
-            import pytest
-            with pytest.raises(OSError):
-                rb.watch(client, worker=W())
-        finally:
-            client.close()
-            thread.join(timeout=5)
-            server.server_close()
-        # transition fired once per distinct title, not per event
-        assert seen == [("A - B", "FIP"), ("C - D", "FIP")]
 
 
 class TestWriteLastRobustness:
@@ -894,6 +1292,7 @@ class TestWriteLastRobustness:
 
 class TestCmdMenuNotifyRobustness:
     def test_missing_notify_send_no_menu_tool_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "find_menu_cmd", lambda which=None: None)
 
         def run(cmd, **kwargs):
@@ -904,6 +1303,7 @@ class TestCmdMenuNotifyRobustness:
     def test_missing_notify_send_unknown_choice_does_not_raise(
             self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(rb, "ipc_command", lambda args: None)
         monkeypatch.setattr(rb, "find_menu_cmd",
                             lambda which=None: ["walker", "--dmenu"])
         monkeypatch.setattr(rb, "cmd_play", lambda name: 1)
@@ -917,3 +1317,438 @@ class TestCmdMenuNotifyRobustness:
             return R()
 
         assert rb.cmd_menu(run=run) == 1
+
+
+class TestParsePlayerctlLine:
+    def test_playing_line(self):
+        line = "spotify\tPlaying\tAir\tLa Femme d'Argent\thttps://i.scdn.co/image/x\n"
+        name, state = rb.parse_playerctl_line(line)
+        assert name == "spotify"
+        assert state == {"status": "Playing", "artist": "Air",
+                         "title": "La Femme d'Argent",
+                         "art_url": "https://i.scdn.co/image/x"}
+
+    def test_empty_fields_become_none(self):
+        name, state = rb.parse_playerctl_line("firefox\tPaused\t\tSome Video\t\n")
+        assert name == "firefox"
+        assert state == {"status": "Paused", "artist": None,
+                         "title": "Some Video", "art_url": None}
+
+    def test_blank_line_is_ignored(self):
+        assert rb.parse_playerctl_line("\n") is None
+        assert rb.parse_playerctl_line("   \n") is None
+
+    def test_wrong_field_count_is_ignored(self):
+        assert rb.parse_playerctl_line("garbage line\n") is None
+        assert rb.parse_playerctl_line("a\tb\tc\n") is None
+
+    def test_stopped_or_cleared_status_drops_player(self):
+        assert rb.parse_playerctl_line("spotify\tStopped\t\t\t\n") == ("spotify", None)
+        assert rb.parse_playerctl_line("spotify\t\t\t\t\n") == ("spotify", None)
+
+    def test_empty_player_name_is_ignored(self):
+        assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
+
+
+def _radio(playing=True, icy="A - B", station="FIP", seq=1):
+    return {"running": True, "paused": not playing, "icy": icy,
+            "media": None, "station": station, "seq": seq}
+
+
+def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1):
+    return {"status": status, "artist": artist, "title": title,
+            "art_url": art_url, "seq": seq}
+
+
+class TestGuardAction:
+    def test_new_playing_player_while_radio_plays_fires(self):
+        assert rb.guard_action({}, {"spotify": _player("Playing")}, True) is True
+
+    def test_transition_paused_to_playing_fires(self):
+        assert rb.guard_action({"spotify": _player("Paused")},
+                               {"spotify": _player("Playing")}, True) is True
+
+    def test_level_state_does_not_fire(self):
+        # already Playing in prev — no edge, no fire (can't fight a user
+        # who resumes radio while spotify is left playing)
+        assert rb.guard_action({"spotify": _player("Playing")},
+                               {"spotify": _player("Playing")}, True) is False
+
+    def test_radio_not_playing_never_fires(self):
+        assert rb.guard_action({}, {"spotify": _player("Playing")}, False) is False
+
+    def test_mpv_player_never_fires(self):
+        # radio's own mpv seen through mpv-mpris must not pause radio
+        assert rb.guard_action({}, {"mpv": _player("Playing")}, True) is False
+
+    def test_paused_player_does_not_fire(self):
+        assert rb.guard_action({}, {"spotify": _player("Paused")}, True) is False
+
+
+class TestArbiter:
+    def test_idle_when_nothing(self):
+        active = rb.arbiter({"running": False}, {})
+        assert active["source"] == "idle" and active["playing"] is False
+
+    def test_playing_radio_beats_paused_player(self):
+        active = rb.arbiter(_radio(playing=True, seq=1),
+                            {"spotify": _player("Paused", seq=9)})
+        assert active["source"] == "radio" and active["playing"] is True
+        assert active["title"] == "A - B" and active["station"] == "FIP"
+
+    def test_playing_player_beats_paused_radio(self):
+        active = rb.arbiter(_radio(playing=False, seq=9),
+                            {"spotify": _player("Playing", seq=1)})
+        assert active["source"] == "mpris" and active["player"] == "spotify"
+        assert active["artist"] == "Ar" and active["title"] == "Ti"
+
+    def test_recency_breaks_playing_tie(self):
+        active = rb.arbiter(_radio(playing=True, seq=5),
+                            {"spotify": _player("Playing", seq=7)})
+        assert active["source"] == "mpris"
+        active = rb.arbiter(_radio(playing=True, seq=8),
+                            {"spotify": _player("Playing", seq=7)})
+        assert active["source"] == "radio"
+
+    def test_mpv_player_ignored_while_radio_runs(self):
+        active = rb.arbiter(_radio(playing=True, seq=1),
+                            {"mpv": _player("Playing", seq=9)})
+        assert active["source"] == "radio"
+
+    def test_mpv_player_shown_when_radio_stopped(self):
+        active = rb.arbiter({"running": False},
+                            {"mpv": _player("Playing", title="Some Film")})
+        assert active["source"] == "mpris" and active["player"] == "mpv"
+
+    def test_titleless_player_ignored(self):
+        active = rb.arbiter({"running": False},
+                            {"spotify": _player(title=None)})
+        assert active["source"] == "idle"
+
+    def test_paused_players_recency(self):
+        active = rb.arbiter({"running": False},
+                            {"spotify": _player("Paused", seq=2),
+                             "firefox": _player("Paused", title="V", seq=5)})
+        assert active["player"] == "firefox"
+
+    def test_radio_title_uses_pick_title_fallback(self):
+        active = rb.arbiter(_radio(icy=None), {})
+        assert active["title"] == "FIP"
+
+
+class TestStateStore:
+    def test_initial_snapshot_is_idle(self):
+        store = rb.StateStore()
+        radio, players = store.snapshot()
+        assert radio == {"running": False} and players == {}
+
+    def test_set_radio_stamps_increasing_seq_and_sets_event(self):
+        store = rb.StateStore()
+        store.set_radio({"running": True, "paused": False, "icy": None,
+                         "media": None, "station": "FIP"})
+        assert store.changed.is_set()
+        radio1, _ = store.snapshot()
+        store.set_radio({"running": True, "paused": True, "icy": None,
+                         "media": None, "station": "FIP"})
+        radio2, _ = store.snapshot()
+        assert radio2["seq"] > radio1["seq"]
+
+    def test_update_and_drop_player(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Playing", "artist": "A",
+                                        "title": "T", "art_url": None})
+        _, players = store.snapshot()
+        assert players["spotify"]["status"] == "Playing"
+        assert "seq" in players["spotify"]
+        store.update_player("spotify", None)
+        _, players = store.snapshot()
+        assert players == {}
+
+    def test_player_seq_advances_across_updates(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Paused", "artist": None,
+                                        "title": "T", "art_url": None})
+        store.update_player("firefox", {"status": "Playing", "artist": None,
+                                        "title": "V", "art_url": None})
+        _, players = store.snapshot()
+        assert players["firefox"]["seq"] > players["spotify"]["seq"]
+
+    def test_snapshot_is_a_copy(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Playing", "artist": None,
+                                        "title": "T", "art_url": None})
+        _, players = store.snapshot()
+        players["spotify"]["status"] = "Paused"
+        _, players2 = store.snapshot()
+        assert players2["spotify"]["status"] == "Playing"
+
+    def test_set_radio_repeated_identical_state_is_a_noop(self):
+        store = rb.StateStore()
+        store.set_radio({"running": True, "paused": False, "icy": None,
+                         "media": None, "station": "FIP"})
+        radio1, _ = store.snapshot()
+        store.changed.clear()
+        store.set_radio({"running": True, "paused": False, "icy": None,
+                         "media": None, "station": "FIP"})
+        radio2, _ = store.snapshot()
+        assert radio2["seq"] == radio1["seq"]
+        assert not store.changed.is_set()
+
+    def test_clear_players_on_empty_store_is_a_noop(self):
+        store = rb.StateStore()
+        store.changed.clear()
+        store.clear_players()
+        assert not store.changed.is_set()  # mirrors set_radio's no-op latch
+
+    def test_clear_players_on_nonempty_store_clears_and_sets_changed(self):
+        store = rb.StateStore()
+        store.update_player("spotify", {"status": "Playing", "artist": None,
+                                        "title": "T", "art_url": None})
+        store.changed.clear()
+        store.clear_players()
+        assert store.changed.is_set()
+        _, players = store.snapshot()
+        assert players == {}
+
+
+class TestActiveFile:
+    def test_roundtrip_only_source_and_player(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH",
+                           str(tmp_path / "active.json"))
+        rb.write_active({"source": "mpris", "player": "spotify",
+                         "playing": True, "title": "T"})
+        assert rb.read_active() == {"source": "mpris", "player": "spotify"}
+
+    def test_missing_file_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH",
+                           str(tmp_path / "absent.json"))
+        assert rb.read_active() is None
+
+    def test_corrupt_file_returns_none(self, tmp_path, monkeypatch):
+        p = tmp_path / "active.json"
+        p.write_text("{nope")
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH", str(p))
+        assert rb.read_active() is None
+
+
+class TestClickDispatch:
+    def _set_active(self, tmp_path, monkeypatch, source, player=None):
+        monkeypatch.setenv("RADIOBAR_ACTIVE_PATH",
+                           str(tmp_path / "active.json"))
+        if source is not None:
+            rb.write_active({"source": source, "player": player})
+
+    def test_mpris_active_click_play_pauses_that_player(
+            self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "mpris", "spotify")
+        calls = []
+        assert rb.cmd_click(run=lambda cmd, **k: calls.append(cmd)) == 0
+        assert calls == [["playerctl", "-p", "spotify", "play-pause"]]
+
+    def test_radio_active_click_falls_through_to_toggle(
+            self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "radio")
+        toggled = []
+        monkeypatch.setattr(rb, "cmd_toggle",
+                            lambda run=None: toggled.append(1) or 0)
+        assert rb.cmd_click(run=lambda cmd, **k: None) == 0
+        assert toggled == [1]
+
+    def test_idle_or_missing_click_falls_through_to_toggle(
+            self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, None)
+        toggled = []
+        monkeypatch.setattr(rb, "cmd_toggle",
+                            lambda run=None: toggled.append(1) or 0)
+        assert rb.cmd_click(run=lambda cmd, **k: None) == 0
+        assert toggled == [1]
+
+    def test_prev_next_only_act_on_mpris(self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "mpris", "spotify")
+        calls = []
+        assert rb.cmd_prev(run=lambda cmd, **k: calls.append(cmd)) == 0
+        assert rb.cmd_next(run=lambda cmd, **k: calls.append(cmd)) == 0
+        assert calls == [["playerctl", "-p", "spotify", "previous"],
+                         ["playerctl", "-p", "spotify", "next"]]
+        self._set_active(tmp_path, monkeypatch, "radio")
+        calls2 = []
+        assert rb.cmd_prev(run=lambda cmd, **k: calls2.append(cmd)) == 0
+        assert calls2 == []
+
+    def test_missing_playerctl_returns_error(self, tmp_path, monkeypatch):
+        self._set_active(tmp_path, monkeypatch, "mpris", "spotify")
+
+        def run(cmd, **k):
+            raise FileNotFoundError("playerctl")
+        assert rb.cmd_click(run=run) == 1
+
+
+class TestMainDispatchNewCommands:
+    def test_click_prev_next_dispatch(self, monkeypatch):
+        for name, fn in (("click", "cmd_click"), ("prev", "cmd_prev"),
+                         ("next", "cmd_next")):
+            monkeypatch.setattr(rb, fn, lambda run=None: 0)
+            assert rb.main([name]) == 0
+
+
+class _NP:
+    """Harness: NowPlaying with everything injected and recorded."""
+
+    def __init__(self):
+        self.store = rb.StateStore()
+        self.emitted, self.ipc_calls, self.actives = [], [], []
+        self.worker_calls = []
+
+        class W:
+            def track_changed(w, title, subtitle, art_url=None):
+                self.worker_calls.append(("track", title, subtitle, art_url))
+
+            def clear(w):
+                self.worker_calls.append(("clear",))
+
+        self.np = rb.NowPlaying(
+            self.store, W(),
+            renderer=rb.Renderer(choose=lambda colors: colors[0]),
+            emit_fn=self.emitted.append,
+            ipc=lambda args: self.ipc_calls.append(args) or {"error": "success"},
+            write_active_fn=self.actives.append)
+
+
+class TestNowPlaying:
+    def test_idle_tick_emits_idle_and_clears_worker(self):
+        h = _NP()
+        h.np.tick()
+        assert h.emitted[-1]["class"] == "idle"
+        assert h.worker_calls == [("clear",)]
+        assert h.actives[-1]["source"] == "idle"
+
+    def test_radio_track_kicks_worker_once(self):
+        h = _NP()
+        h.store.set_radio({"running": True, "paused": False, "icy": "A - B",
+                           "media": None, "station": "FIP"})
+        h.np.tick()
+        h.np.tick()  # same identity → no second worker call
+        assert h.worker_calls == [("track", "A - B", "FIP", None)]
+        assert h.actives[-1]["source"] == "radio"
+        assert len(h.emitted) == 2  # render/emit happens every tick
+
+    def test_mpris_track_passes_art_url_and_player_subtitle(self):
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": "https://a/i"})
+        h.np.tick()
+        assert h.worker_calls == [("track", "Ar - Ti", "Spotify", "https://a/i")]
+        assert h.actives[-1] == {"source": "mpris", "player": "spotify",
+                                 "playing": True, "artist": "Ar",
+                                 "title": "Ti", "art_url": "https://a/i",
+                                 "station": None}
+
+    def test_mpris_without_art_url_passes_empty_string(self):
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        assert h.worker_calls == [("track", "Ar - Ti", "Spotify", "")]
+
+    def test_late_arriving_art_url_refires_worker(self):
+        # Spotify emits title-before-artwork: the first tick sees no
+        # art_url yet; a later tick for the *same* track brings one. The
+        # worker must be re-notified so the art still reaches the bar.
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": "https://a/i"})
+        h.np.tick()
+        assert h.worker_calls == [("track", "Ar - Ti", "Spotify", ""),
+                                 ("track", "Ar - Ti", "Spotify", "https://a/i")]
+
+    def test_guard_pauses_radio_when_player_starts(self):
+        h = _NP()
+        h.store.set_radio({"running": True, "paused": False, "icy": "A - B",
+                           "media": None, "station": "FIP"})
+        h.np.tick()  # radio showing
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        assert ["set_property", "pause", True] in h.ipc_calls
+        # after the guard, the emitted line is spotify (radio now paused)
+        assert "Ar - Ti" in h.emitted[-1]["text"]
+
+    def test_guard_does_not_refire_on_level_state(self):
+        h = _NP()
+        h.store.set_radio({"running": True, "paused": False, "icy": "A - B",
+                           "media": None, "station": "FIP"})
+        h.np.tick()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        n = h.ipc_calls.count(["set_property", "pause", True])
+        h.np.tick()
+        h.np.tick()
+        assert h.ipc_calls.count(["set_property", "pause", True]) == n
+
+    def test_source_flip_writes_active_file(self):
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": None,
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        h.store.update_player("spotify", None)
+        h.np.tick()
+        assert [a["source"] for a in h.actives] == ["mpris", "idle"]
+
+    def test_run_initial_tick_then_bounded_wait_loop(self):
+        h = _NP()
+        order = []
+
+        class FakeEvent:
+            def __init__(self):
+                self.wait_timeouts = []
+
+            def wait(self, timeout=None):
+                self.wait_timeouts.append(timeout)
+                order.append(("wait", timeout))
+                return True
+
+            def clear(self):
+                order.append(("clear",))
+
+            def set(self):
+                pass
+
+        fake = FakeEvent()
+        h.store.changed = fake
+
+        real_tick = h.np.tick
+
+        def tracking_tick():
+            order.append(("tick",))
+            real_tick()
+
+        h.np.tick = tracking_tick
+
+        # Idle store: renderer never needs a tick -> timeout=None each time.
+        h.np.run(max_ticks=3)
+        assert order == [("tick",), ("wait", None), ("clear",), ("tick",),
+                         ("wait", None), ("clear",), ("tick",)]
+        assert fake.wait_timeouts == [None, None]  # (a) initial tick first,
+        # (b) no-scroll -> timeout=None, (d) clear() precedes each tick
+
+        # Now put a long, scrolling title in play -> renderer.needs_tick()
+        # goes True, so the next run()'s wait() should use TICK_SECONDS.
+        order.clear()
+        fake.wait_timeouts.clear()
+        h.store.update_player(
+            "spotify", {"status": "Playing", "artist": "Artist Name Is Long",
+                       "title": "A Very Long Track Title For Scrolling",
+                       "art_url": None})
+        h.np.run(max_ticks=2)
+        assert fake.wait_timeouts == [rb.TICK_SECONDS]  # (c)
