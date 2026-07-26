@@ -3,7 +3,8 @@
 "custom/radio": {
   "exec": "radiobar status",
   "return-type": "json",
-  "on-click": "radiobar toggle",
+  "on-click": "radiobar click",
+  "on-click-middle": "radiobar prev",
   "on-click-right": "radiobar menu",
   "tooltip": true
 }
