@@ -473,10 +473,12 @@ class Renderer:
         self.key = None
         self.offset = 0
         self.pause_ticks = 0
+        self.playing = False
         self.icon_color = COLORS[0]
         self.text_color = COLORS[0]
 
     def render(self, active: dict) -> dict:
+        self.playing = active["playing"]
         if active["source"] == "idle":
             self.key = None
             return {"text": ICON_IDLE, "tooltip": "RadioBar: off",
@@ -494,14 +496,20 @@ class Renderer:
             self.icon_color = self.choose(COLORS)
             self.text_color = self.choose(COLORS)
         if len(body) > SCROLL_WINDOW:
+            # Paused -> no marquee: snap to the title head and hold there;
+            # resume restarts the normal hold-then-scroll cycle.
+            if not active["playing"]:
+                self.offset = 0
+                self.pause_ticks = PAUSE_TICKS
             shown = scroll_window(body, SCROLL_WINDOW, self.offset)
-            if self.pause_ticks > 0:
-                self.pause_ticks -= 1
-            else:
-                self.offset += 1
-                if self.offset >= len(body) + len(SCROLL_PAD):
-                    self.offset = 0
-                    self.pause_ticks = PAUSE_TICKS
+            if active["playing"]:
+                if self.pause_ticks > 0:
+                    self.pause_ticks -= 1
+                else:
+                    self.offset += 1
+                    if self.offset >= len(body) + len(SCROLL_PAD):
+                        self.offset = 0
+                        self.pause_ticks = PAUSE_TICKS
         else:
             shown = body
         if active["source"] == "radio":
@@ -518,7 +526,8 @@ class Renderer:
                 "markup": "pango"}
 
     def needs_tick(self) -> bool:
-        return self.key is not None and len(self.key[2]) > SCROLL_WINDOW
+        return (self.playing and self.key is not None
+                and len(self.key[2]) > SCROLL_WINDOW)
 
 
 IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,

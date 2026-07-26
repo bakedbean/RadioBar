@@ -106,6 +106,42 @@ class TestRenderer:
         moved = r.render(long)["text"]
         assert moved != first
 
+    def test_paused_long_title_freezes_at_start_no_tick(self):
+        r = self._renderer()
+        title = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef"
+        playing = _mpris_active(artist=None, title=title)
+        paused = _mpris_active(artist=None, title=title, playing=False)
+        for _ in range(rb.PAUSE_TICKS + 5):  # scroll partway in
+            r.render(playing)
+        assert r.needs_tick() is True
+        first = r.render(paused)["text"]
+        assert title[:rb.SCROLL_WINDOW] in first
+        assert r.render(paused)["text"] == first
+        assert r.needs_tick() is False
+
+    def test_resume_after_pause_holds_then_scrolls(self):
+        r = self._renderer()
+        title = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef"
+        playing = _mpris_active(artist=None, title=title)
+        for _ in range(rb.PAUSE_TICKS + 5):
+            r.render(playing)
+        r.render(_mpris_active(artist=None, title=title, playing=False))
+        first = r.render(playing)["text"]
+        # offset advances after `shown` is computed, so the hold spans
+        # PAUSE_TICKS further renders before the window visibly moves
+        for _ in range(rb.PAUSE_TICKS):
+            held = r.render(playing)["text"]
+        assert held == first
+        assert r.render(playing)["text"] != first
+
+    def test_paused_radio_long_title_freezes(self):
+        r = self._renderer()
+        title = "A Station Playing A Very Long Track Title"
+        paused = _radio_active(playing=False, title=title)
+        first = r.render(paused)["text"]
+        assert r.render(paused)["text"] == first
+        assert r.needs_tick() is False
+
     def test_track_change_resets_scroll_and_recolors(self):
         picks = iter(rb.COLORS)
         r = rb.Renderer(choose=lambda colors: next(picks))
