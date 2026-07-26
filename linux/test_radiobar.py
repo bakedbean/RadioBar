@@ -1362,6 +1362,7 @@ class TestNowPlaying:
         h.np.tick()  # same identity → no second worker call
         assert h.worker_calls == [("track", "A - B", "FIP", None)]
         assert h.actives[-1]["source"] == "radio"
+        assert len(h.emitted) == 2  # render/emit happens every tick
 
     def test_mpris_track_passes_art_url_and_player_subtitle(self):
         h = _NP()
@@ -1382,6 +1383,22 @@ class TestNowPlaying:
                                "title": "Ti", "art_url": None})
         h.np.tick()
         assert h.worker_calls == [("track", "Ar - Ti", "Spotify", "")]
+
+    def test_late_arriving_art_url_refires_worker(self):
+        # Spotify emits title-before-artwork: the first tick sees no
+        # art_url yet; a later tick for the *same* track brings one. The
+        # worker must be re-notified so the art still reaches the bar.
+        h = _NP()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": None})
+        h.np.tick()
+        h.store.update_player("spotify",
+                              {"status": "Playing", "artist": "Ar",
+                               "title": "Ti", "art_url": "https://a/i"})
+        h.np.tick()
+        assert h.worker_calls == [("track", "Ar - Ti", "Spotify", ""),
+                                 ("track", "Ar - Ti", "Spotify", "https://a/i")]
 
     def test_guard_pauses_radio_when_player_starts(self):
         h = _NP()
@@ -1419,3 +1436,51 @@ class TestNowPlaying:
         h.store.update_player("spotify", None)
         h.np.tick()
         assert [a["source"] for a in h.actives] == ["mpris", "idle"]
+
+    def test_run_initial_tick_then_bounded_wait_loop(self):
+        h = _NP()
+        order = []
+
+        class FakeEvent:
+            def __init__(self):
+                self.wait_timeouts = []
+
+            def wait(self, timeout=None):
+                self.wait_timeouts.append(timeout)
+                order.append(("wait", timeout))
+                return True
+
+            def clear(self):
+                order.append(("clear",))
+
+            def set(self):
+                pass
+
+        fake = FakeEvent()
+        h.store.changed = fake
+
+        real_tick = h.np.tick
+
+        def tracking_tick():
+            order.append(("tick",))
+            real_tick()
+
+        h.np.tick = tracking_tick
+
+        # Idle store: renderer never needs a tick -> timeout=None each time.
+        h.np.run(max_ticks=3)
+        assert order == [("tick",), ("wait", None), ("clear",), ("tick",),
+                         ("wait", None), ("clear",), ("tick",)]
+        assert fake.wait_timeouts == [None, None]  # (a) initial tick first,
+        # (b) no-scroll -> timeout=None, (d) clear() precedes each tick
+
+        # Now put a long, scrolling title in play -> renderer.needs_tick()
+        # goes True, so the next run()'s wait() should use TICK_SECONDS.
+        order.clear()
+        fake.wait_timeouts.clear()
+        h.store.update_player(
+            "spotify", {"status": "Playing", "artist": "Artist Name Is Long",
+                       "title": "A Very Long Track Title For Scrolling",
+                       "art_url": None})
+        h.np.run(max_ticks=2)
+        assert fake.wait_timeouts == [rb.TICK_SECONDS]  # (c)

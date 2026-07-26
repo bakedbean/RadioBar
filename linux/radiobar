@@ -848,7 +848,7 @@ class NowPlaying:
         active = arbiter(radio, players)
         self.emit(self.renderer.render(active))
         identity = (active["source"], active["player"], active["artist"],
-                    active["title"])
+                    active["title"], active["art_url"])
         if identity == self.last_identity:
             return
         self.last_identity = identity
@@ -862,13 +862,17 @@ class NowPlaying:
                                       (active["player"] or "").capitalize(),
                                       active["art_url"] or "")
 
-    def run(self):
+    def run(self, max_ticks=None):
+        """Blocking loop; `max_ticks` bounds iterations (tests only) —
+        None means forever, matching production (cmd_status) behavior."""
         self.tick()
-        while True:
+        ticks = 1
+        while max_ticks is None or ticks < max_ticks:
             timeout = TICK_SECONDS if self.renderer.needs_tick() else None
             self.store.changed.wait(timeout=timeout)
             self.store.changed.clear()
             self.tick()
+            ticks += 1
 
 
 def watch(sock, store):
