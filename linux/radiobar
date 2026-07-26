@@ -309,12 +309,12 @@ def fetch_track_art(title: str, art_url=None,
                     urlopen=urllib.request.urlopen) -> dict:
     """Cache-through art lookup; failed lookups are cached as misses.
 
-    Downloads both the 600x600 (for notifications) and the native 100x100
-    (for the waybar bar) images when available; each download is guarded
+    art_url is a string (MPRIS-reported mpris:artUrl) -> delegate to
+    fetch_mpris_art, keyed by URL. art_url is None -> the radio path
+    below: an iTunes Search API lookup keyed by title, which downloads
+    both the 600x600 (for notifications) and the native 100x100 (for the
+    waybar bar) images when available; each download is guarded
     independently so a failure on one doesn't lose the other.
-
-    art_url is None -> existing iTunes lookup keyed by title; a string ->
-    delegate to fetch_mpris_art (MPRIS-reported artUrl), keyed by URL.
     """
     if art_url is not None:
         return fetch_mpris_art(art_url, urlopen)
@@ -526,7 +526,13 @@ IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,
 
 def guard_action(prev_players: dict, players: dict,
                  radio_playing: bool) -> bool:
-    """Edge-triggered: did some player just start playing over the radio?"""
+    """Edge-triggered: did some player just start playing over the radio?
+
+    Deliberately asymmetric with arbiter(): a titleless player turning
+    Playing still fires the guard here (the app IS audible, so radio
+    should pause) even though arbiter() filters titleless players from
+    what the bar displays.
+    """
     if not radio_playing:
         return False
     for name, p in players.items():

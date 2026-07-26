@@ -1,6 +1,10 @@
 /* Append to ~/.config/waybar/style.css */
 #custom-radio {
   padding: 0 10px;
+  /* Scrolling text needs a monospace font or the 30-char scroll window's
+     pixel width varies each tick, and the module's left edge jumps.
+     CaskaydiaMono NF ships with omarchy. */
+  font-family: "CaskaydiaMono Nerd Font";
 }
 
 #custom-radio.playing {
