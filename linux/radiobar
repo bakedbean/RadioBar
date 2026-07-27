@@ -30,8 +30,12 @@ STOP_ENTRY = "■ Stop radio"
 
 SCROLL_WINDOW = 30
 SCROLL_PAD = "   •   "
-PAUSE_TICKS = 10          # 1 s of hold at TICK_SECONDS per step
-TICK_SECONDS = 0.1
+PAUSE_TICKS = 4           # 1 s of hold at TICK_SECONDS per step
+# 4 Hz, not 10: every marquee tick is a dp.emit() into waybar's glibmm
+# dispatcher pipe, and a full pipe arms waybar 0.15's Network-module
+# ABBA deadlock (network.cpp:214 emits under the mutex update() takes).
+# Slower ticks keep the pipe drainable during main-loop stalls.
+TICK_SECONDS = 0.25
 
 COLORS = [
     "#F5C402", "#f4b8e4", "#99d1db", "#a6d189", "#8caaee",
