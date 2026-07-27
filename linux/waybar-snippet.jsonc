@@ -18,6 +18,11 @@
   "path": "/run/user/1000/radiobar-art.jpg",
   "size": 20,
   "signal": 6,
+  // "once" is load-bearing, do NOT omit it: waybar 0.15.0 clamps a missing
+  // interval to 1ms, so the module would reload the jpg 1000x/s — ~50% CPU
+  // and enough dispatcher traffic to trigger waybar's freeze deadlock.
+  // RadioBar's RTMIN+6 signal still refreshes the art on track changes.
+  "interval": "once",
   "tooltip": false
 }
 // (Adjust /run/user/1000 if your UID differs — echo $XDG_RUNTIME_DIR.)

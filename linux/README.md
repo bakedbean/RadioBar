@@ -40,8 +40,17 @@ definitions (adjust the path to your `$XDG_RUNTIME_DIR`):
       "path": "/run/user/1000/radiobar-art.jpg",
       "size": 20,
       "signal": 6,
+      "interval": "once",
       "tooltip": false
     }
+
+`"interval": "once"` is load-bearing — do not omit it. waybar 0.15.0
+clamps a missing `interval` to 1ms (its "no interval" fallback is dead
+code), so without it the image module reloads the jpg 1000×/s: ~50% CPU
+in waybar and enough Dispatcher-pipe traffic to routinely trigger
+waybar 0.15's module-mutex deadlock, freezing the whole bar. With
+`"once"`, RadioBar's `pkill -RTMIN+6` still refreshes the art on every
+track change; polling is never needed.
 
 **Hotkey (Hyprland)** — add to `~/.config/hypr/bindings.conf`:
 
