@@ -104,15 +104,24 @@ Lowering the window means *more* titles overflow it and therefore animate,
 which is what the 4 Hz tick below is sized for.
 
 **If the bar still jogs**: the scroll window itself is fixed-width under a
-monospace font, but any module to the *right* of the radio slot whose text
-changes width (live network bandwidth, cpu/memory percent crossing digit
-counts, battery 99↔100%) shifts the art/title sideways whenever it updates.
+monospace font, but a neighbouring module whose own width changes will shift
+the radio slot whenever it updates. Two sources on a typical bar: any module
+between the radio slot and the nearest bar edge whose text changes width
+(live network bandwidth, cpu/memory percent crossing digit counts, battery
+99↔100%), and `image#radioart` itself, which occupies its box only while art
+exists — waybar adds an `empty` class and hides the inner image when the
+file is gone, so the title shifts as art appears and clears.
+
 Two fixes, best first: pad the variable fields to a fixed character width
 in the module's format string and give that module the same monospace font
 (constant width, no dead space):
 
     "format": "{icon} ⇣{bandwidthDownBytes:>9} ⇡{bandwidthUpBytes:>9}"
-    /* style.css */  #network, #network label { font-family: "CaskaydiaMono Nerd Font"; }
+    /* style.css */  #network { font-family: "CaskaydiaMono Nerd Font"; }
+
+Note the selector is `#network`, not `#network label`: waybar's `ALabel`
+calls `label_.set_name(name)`, so the styled node *is* the label and a
+descendant selector matches nothing.
 
 or, cruder, reserve worst-case space with CSS (leaves visible slack):
 
