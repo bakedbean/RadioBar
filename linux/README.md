@@ -75,7 +75,8 @@ duplicate now-playing info in the bar.
 The bar shows exactly one source at a time: radio whenever it's audible,
 otherwise the most relevant MPRIS player (the one that's playing; if
 several are paused, whichever changed most recently). Titles longer than
-30 characters scroll in a colored window; the full title is in the
+the marquee window (30 characters by default, see **Narrowing the title**
+below) scroll in a colored window; the full title is in the
 tooltip. While playback is paused (radio or MPRIS) the marquee stops at
 the start of the title and resumes scrolling on play. For radio, the
 module shows `󰐊 Artist – Song` while playing and `󰏤 Artist – Song`
@@ -84,6 +85,23 @@ sources, the leading icon identifies the player
 (Spotify, Shortwave, Discord, or a generic music note) instead, with a
 `󰏤` status icon appended only when paused. A dim `󰐹` shows when
 everything's off.
+
+**Narrowing the title (small displays)**: the marquee window is 30
+characters by default, which occupies about 210px at a 12px monospace font
+— enough to crowd `modules-center` on a narrow bar. Set
+`RADIOBAR_SCROLL_WINDOW` on the module's own `exec` so the value lives with
+the rest of your waybar config instead of in the script:
+
+    "exec": "RADIOBAR_SCROLL_WINDOW=25 radiobar status"
+
+Nothing is lost by shrinking it — the full title is always in the tooltip.
+Values below 8 (one more than the `   •   ` seam pad, below which the pad
+could fill the whole window and hide the title) are refused, as are
+non-numeric ones; both fall back to 30. waybar discards this script's
+stderr, so a rejected value only reports itself when you run
+`radiobar status` by hand. A very large value disables scrolling entirely.
+Lowering the window means *more* titles overflow it and therefore animate,
+which is what the 4 Hz tick below is sized for.
 
 **If the bar still jogs**: the scroll window itself is fixed-width under a
 monospace font, but any module to the *right* of the radio slot whose text
