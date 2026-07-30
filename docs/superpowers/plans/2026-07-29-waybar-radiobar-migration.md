@@ -96,13 +96,15 @@ timeout 5 radiobar status | head -3
 
 Expected: one or more lines of JSON, each with at least a `text` key (likely `"class": "idle"` and a dim `󰐹`, since nothing is playing yet). A Python traceback or "command not found" here means STOP and fix before touching waybar.
 
-- [ ] **Step 6: Confirm `stations.json` was seeded**
+- [ ] **Step 6: Confirm `stations.json` is absent — seeding is lazy, by design**
 
 ```bash
-ls -l ~/.config/radiobar/stations.json && python3 -c "import json;print(len(json.load(open('$HOME/.config/radiobar/stations.json'))),'stations')"
+ls -l ~/.config/radiobar/stations.json 2>&1 || echo "absent as expected — seeded lazily"
 ```
 
-Expected: the file exists and reports a non-zero station count. `load_stations()` (`linux/radiobar:116`) seeds it from built-ins on first run, so Step 5 should have created it.
+Expected: the file does **not** exist yet. `load_stations()` (`linux/radiobar:116`) is called only by `cmd_toggle`, `cmd_play`, and `cmd_menu` — never by `cmd_status` — so `radiobar status` does not and should not create it. The station list is only needed once you actually start or select a station.
+
+Nothing in Tasks 2–4 requires it to pre-exist: Task 2 exercises `radiobar status` only, and Task 3 Step 6's `radiobar toggle` is what seeds it. If the file *does* already exist here, that is also fine — it just means a station command ran earlier.
 
 - [ ] **Step 7: No commit**
 
@@ -385,6 +387,9 @@ Expected: comparable to Task 2 Step 8 — well under 1000 ms / 5% of a core. **A
 # Start a station, then check the art file lands and the bar picks it up.
 radiobar toggle
 sleep 15
+# This is also the first station command to run, so it seeds stations.json
+# (Task 1 deliberately did not — `radiobar status` never touches stations).
+ls -l ~/.config/radiobar/stations.json && python3 -c "import json;print(len(json.load(open('$HOME/.config/radiobar/stations.json'))),'stations seeded')"
 ls -l /run/user/1000/radiobar-art.jpg && file /run/user/1000/radiobar-art.jpg
 grim -g "0,0 700x26" /tmp/bar-task3.png && echo wrote /tmp/bar-task3.png
 ```
