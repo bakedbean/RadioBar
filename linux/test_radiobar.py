@@ -3,7 +3,6 @@ import importlib.machinery
 import importlib.util
 import json
 import pathlib
-import pytest
 import re
 import socketserver
 import sys
@@ -11,6 +10,8 @@ import threading
 import time
 import urllib.parse
 from pathlib import Path
+
+import pytest
 
 
 def _load():

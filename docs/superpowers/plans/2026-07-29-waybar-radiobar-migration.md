@@ -50,8 +50,11 @@ There is no code to test, so each task's gate is a verification command whose ex
 
 ```bash
 cd /home/eben/.local/state/wsx/worktrees/RadioBar/smug-thyme
-python -m pytest linux/test_radiobar.py -q
+uv run --with pytest pytest linux/test_radiobar.py -q
 ```
+
+`python -m pytest` does NOT work here — pytest is not installed system-wide
+and there is no venv, so it fails with `No module named pytest`.
 
 Expected: all tests pass, exit 0. If anything fails, STOP — do not install a broken script into a live bar. Report the failure.
 
@@ -441,7 +444,7 @@ grep -n 'SUPER SHIFT, R,' ~/.config/hypr/bindings.conf; echo "exit=$?"
 omarchy menu keybindings --print 2>/dev/null | grep -i 'SUPER SHIFT R' || echo "no SUPER SHIFT R binding found"
 ```
 
-Expected: no match. As of 2026-07-29 the nearest neighbors were `SUPER CTRL R` (reminders) and `SUPER SHIFT M` (Spotify) — neither collides. If a match now exists, add an `unbind = SUPER, R` line before the new bind and tell the user what it displaced.
+Expected: no match. As of 2026-07-29 the nearest neighbors were `SUPER CTRL R` (reminders) and `SUPER SHIFT M` (Spotify) — neither collides. If a match now exists, add an `unbind = SUPER SHIFT, R` line before the new bind and tell the user what it displaced. (Note the modifiers: `unbind = SUPER, R` would target a different, unrelated keybind.)
 
 - [ ] **Step 2: Append the binding**
 

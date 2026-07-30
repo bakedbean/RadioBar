@@ -56,7 +56,9 @@ Chosen over the README's `cp` so a `git pull` in `/home/eben/RadioBar`
 propagates to the bar with no re-copy. The tradeoff accepted: the bar breaks if
 that checkout moves or is deleted. No `chmod` — the source is already `+x` with
 a `#!/usr/bin/env python3` shebang. No station setup — `load_stations()`
-(`linux/radiobar:116`) seeds `stations.json` from built-ins on first run.
+(`linux/radiobar:116`) seeds `stations.json` from built-ins on the first
+*station* command (`toggle`/`play`/`menu`). `cmd_status` never calls it, so
+installing and running the module alone does not create the file.
 
 ### 2. `~/.config/waybar/config.jsonc`
 
@@ -155,14 +157,30 @@ omarchy default) and `SUPER SHIFT M` (Spotify) — neither collides, so no
 
 Run in order; each step gates the next.
 
-1. `python -m pytest linux/test_radiobar.py` — repo suite still green.
+1. `uv run --with pytest pytest linux/test_radiobar.py` — repo suite still
+   green. (`python -m pytest` does not work on this machine: pytest is not
+   installed system-wide and there is no venv.)
 2. `timeout 5 radiobar status` — emits parseable waybar JSON lines via the
    symlink, confirming PATH resolution and the shebang.
 3. `omarchy restart waybar` (waybar does *not* auto-reload).
-4. Confirm waybar is alive after ~10s and its log is free of module errors —
-   this is the check that would catch the `interval` freeze.
-5. Screenshot the bar to confirm the module and thumbnail render, that the
-   marquee does not jog, and that glyph style matches its neighbors.
+4. Confirm waybar is still alive after ~10s. Do **not** try to read its log:
+   waybar runs in a transient `app-Hyprland-waybar-*.scope` that records
+   nothing to the journal, and the Hyprland log has no waybar lines either,
+   so an invalid config surfaces only as a dead process.
+5. Sample the CPU-time delta over a 20s window — this, not a log, is what
+   catches the `interval` freeze, whose signature is ~50% of a core:
+
+       U=$(systemctl --user list-units --type=scope --plain --no-legend \
+             'app-Hyprland-waybar-*' | awk '{print $1}')
+       A=$(systemctl --user show -p CPUUsageNSec --value "$U"); sleep 20
+       B=$(systemctl --user show -p CPUUsageNSec --value "$U")
+       echo "$(( (B-A)/1000000 )) ms over 20s"
+
+   The scope name is regenerated on every restart, so re-derive it each time.
+6. Screenshot the bar to confirm the module and thumbnail render and that
+   glyph style matches its neighbors. Note that eyeballing the marquee only
+   proves stability if the title actually exceeds the scroll window — verify
+   the constant-width property at the renderer level instead.
 
 ## Rollback
 
