@@ -113,8 +113,7 @@ snippet's `CaskaydiaMono Nerd Font`:
 
 ```css
 #custom-radio { padding: 0 10px; }
-#custom-radio,
-#custom-radio label { font-family: 'FiraCode Nerd Font'; }
+#custom-radio { font-family: 'FiraCode Nerd Font'; }
 #custom-radio.playing { color: @foreground; }
 #custom-radio.paused,
 #custom-radio.idle { opacity: 0.5; }
@@ -122,19 +121,28 @@ snippet's `CaskaydiaMono Nerd Font`:
 
 Two constraints are in play, and both are satisfied:
 
-- **Monospace is required.** Under a proportional font the 30-char scroll
-  window's pixel width varies each tick and the module's left edge visibly jumps.
-  The snippet hardcodes CaskaydiaMono only as a safe omarchy-default bet; the
-  real requirement is "any monospace font," and `FiraCode Nerd Font` is
+- **Monospace is required.** The scroll window is a fixed *character* count, so
+  under a proportional font its pixel width varies each tick and the title's
+  trailing edge jitters. (The module's *left* edge is pinned here, since
+  `custom/radio` sits last in a left-aligned `modules-left`.) The snippet
+  hardcodes CaskaydiaMono only as a safe omarchy-default bet; the real
+  requirement is "any monospace font," and `FiraCode Nerd Font` is
   `spacing=100`. Pinning the current font satisfies the constraint *and* matches
   the rest of the bar's glyphs.
-- **The pin must be explicit, and must name the label node.** This
-  `style.css` has `* { font-family: 'FiraCode Nerd Font'; }`. In GTK CSS that
-  universal selector matches waybar's inner label node *directly*, which beats a
-  font merely inherited from the `#custom-radio` container — hence
-  `#custom-radio label` in the selector list, where the ID out-specifies `*`.
-  Relying on inheritance from `*` instead would also mean a future
+- **The pin must be explicit — but a `label` descendant selector is wrong.**
+  This `style.css` has `* { font-family: 'FiraCode Nerd Font'; }`, which matches
+  the module's node directly; only the id selector's higher specificity (0-1-0
+  vs 0-0-0) beats it, so relying on inheritance would mean a future
   `omarchy font set <proportional font>` silently starts jogging the bar.
+  However, `#custom-radio label` — as `linux/style-snippet.css` recommended and
+  earlier revisions of this spec asserted was load-bearing — **matches nothing**.
+  waybar's `ALabel` does `label_.set_name(name)` and then `event_box_.add(label_)`,
+  so the styled node *is* `label#custom-radio`; a descendant selector asks for a
+  label inside a label. Confirmed two ways: waybar 0.15.0 source, and a live
+  probe where `#custom-radio { font-family: 'DejaVu Serif' }` visibly applied
+  while `#custom-radio label { font-size: 22px }` did nothing. The font pin
+  worked regardless — only the stated reason was wrong. `linux/style-snippet.css`
+  and `linux/README.md` are corrected accordingly.
 
 `@foreground` is already in scope via the existing
 `@import "../omarchy/current/theme/waybar.css"`.
@@ -170,13 +178,18 @@ Run in order; each step gates the next.
 5. Sample the CPU-time delta over a 20s window — this, not a log, is what
    catches the `interval` freeze, whose signature is ~50% of a core:
 
-       U=$(systemctl --user list-units --type=scope --plain --no-legend \
-             'app-Hyprland-waybar-*' | awk '{print $1}')
+       U=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
        A=$(systemctl --user show -p CPUUsageNSec --value "$U"); sleep 20
        B=$(systemctl --user show -p CPUUsageNSec --value "$U")
        echo "$(( (B-A)/1000000 )) ms over 20s"
 
    The scope name is regenerated on every restart, so re-derive it each time.
+   Derive it from the live PID's cgroup, **not** from
+   `systemctl --user list-units 'app-Hyprland-waybar-*'`: a station started by
+   clicking the module leaves mpv parented to the waybar scope of that moment,
+   and because mpv survives a waybar restart it keeps that old scope alive.
+   The glob then returns two unit names, `$U` becomes malformed, and the
+   measurement is silently wrong. Observed in practice on 2026-07-29.
 6. Screenshot the bar to confirm the module and thumbnail render and that
    glyph style matches its neighbors. Note that eyeballing the marquee only
    proves stability if the title actually exceeds the scroll window — verify

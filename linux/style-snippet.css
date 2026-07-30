@@ -3,14 +3,21 @@
   padding: 0 10px;
 }
 
-#custom-radio,
-#custom-radio label {
-  /* Scrolling text needs a monospace font or the 30-char scroll window's
-     pixel width varies each tick, and the module's left edge jumps.
-     CaskaydiaMono NF ships with omarchy. Set on the label node too:
-     GTK CSS matches the module's inner label directly with a universal
-     `* { font-family: ... }` selector in style.css, and that direct match
-     beats a font merely inherited from the #custom-radio container. */
+#custom-radio {
+  /* Scrolling text needs a monospace font. The scroll window is a fixed
+     CHARACTER count, so under a proportional font its pixel width varies
+     every tick and the title's trailing edge jitters. CaskaydiaMono NF
+     ships with omarchy; any monospace font works — if your bar font is
+     already one (check `fc-match -f '%{spacing}\n' '<font>'` for 100),
+     name that one here instead so the module matches its neighbours.
+
+     This must be set explicitly, not inherited: a universal
+     `* { font-family: ... }` rule in style.css matches this very node, and
+     only the id selector's higher specificity beats it. Do NOT write
+     `#custom-radio label` — waybar's ALabel does `label_.set_name(name)`,
+     so the node IS `label#custom-radio` and that selector asks for a label
+     inside a label, matching nothing. Verified against waybar 0.15.0
+     source and by live probe. */
   font-family: "CaskaydiaMono Nerd Font";
 }
 

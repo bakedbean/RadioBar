@@ -13,7 +13,7 @@ Spec: `docs/superpowers/specs/2026-07-29-waybar-radiobar-migration-design.md`
 ## Global Constraints
 
 - **`"interval": "once"` on `image#radioart` is mandatory.** waybar 0.15.0 clamps a missing `interval` to 1ms → ~1000 jpg reloads/sec, ~50% CPU, and a module-mutex deadlock that freezes the whole bar. Never omit it.
-- **`#custom-radio`'s font must be monospace AND set on the `label` node, not just the container.** `style.css` has `* { font-family: 'FiraCode Nerd Font'; }`; that universal selector matches waybar's inner label directly and beats an inherited font. Use `'FiraCode Nerd Font'` (verified `fc-match` spacing=100) — *not* the snippet's CaskaydiaMono.
+- **`#custom-radio`'s font must be monospace and pinned explicitly by id.** `style.css` has `* { font-family: 'FiraCode Nerd Font'; }`, which matches the module's node directly; only the id selector's higher specificity beats it, so inheriting is not enough. Use `'FiraCode Nerd Font'` (verified `fc-match` spacing=100) — *not* the snippet's CaskaydiaMono. Do **not** add `#custom-radio label`: waybar's `ALabel` does `label_.set_name(name)`, so the node *is* `label#custom-radio` and a descendant selector matches nothing.
 - **`custom/radio` goes at the END of `modules-left`.** Its free edge faces the empty bar center so no neighbor can jog the marquee.
 - **`$XDG_RUNTIME_DIR` is `/run/user/1000`.** Art path is `/run/user/1000/radiobar-art.jpg`.
 - **`size: 20` for the art** — bar `height` is 26; stay a few px under.
@@ -73,7 +73,7 @@ Expected: three files created. Record the printed `$TS` value — later rollback
 - [ ] **Step 3: Record the waybar CPU-time baseline**
 
 ```bash
-WB_UNIT=$(systemctl --user list-units --type=scope --plain --no-legend 'app-Hyprland-waybar-*' | awk '{print $1}')
+WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
 echo "unit=$WB_UNIT"
 systemctl --user show -p CPUUsageNSec --value "$WB_UNIT"
 ```
@@ -198,15 +198,17 @@ Leave `~/.config/waybar/scripts/mpris-scroll.py` on disk — it is the rollback 
   padding: 0 10px;
 }
 
-#custom-radio,
-#custom-radio label {
-  /* The marquee needs a monospace font or the 30-char scroll window's pixel
-     width varies each tick and the module's left edge jumps. FiraCode NF is
-     already this bar's font and is spacing=100, so pinning it satisfies the
+#custom-radio {
+  /* The marquee needs a monospace font: the scroll window is a fixed
+     character count, so under a proportional font its pixel width varies
+     each tick and the title's trailing edge jitters. FiraCode NF is already
+     this bar's font and is spacing=100, so pinning it satisfies the
      constraint while matching neighboring modules.
-     The `label` selector is required, not redundant: style.css's
-     `* { font-family: ... }` matches waybar's inner label node directly, and
-     that beats a font merely inherited from the #custom-radio container. */
+     Pin by id, and do NOT add `#custom-radio label`: style.css's
+     `* { font-family: ... }` matches this very node, and the id selector
+     beats it on specificity. waybar's ALabel does `label_.set_name(name)`,
+     so the node IS `label#custom-radio` — a descendant selector asks for a
+     label inside a label and matches nothing. */
   font-family: 'FiraCode Nerd Font';
 }
 
@@ -250,7 +252,7 @@ Expected: a PID. If waybar is dead, the JSONC is malformed (likely a stray or mi
 - [ ] **Step 7: Verify the module is actually running, not just present**
 
 ```bash
-WB_UNIT=$(systemctl --user list-units --type=scope --plain --no-legend 'app-Hyprland-waybar-*' | awk '{print $1}')
+WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
 systemctl --user status "$WB_UNIT" --no-pager | grep -A6 CGroup
 ```
 
@@ -259,7 +261,7 @@ Expected: the cgroup lists `/usr/bin/waybar` plus a `python3 .../radiobar status
 - [ ] **Step 8: Verify CPU is sane and screenshot the bar**
 
 ```bash
-WB_UNIT=$(systemctl --user list-units --type=scope --plain --no-legend 'app-Hyprland-waybar-*' | awk '{print $1}')
+WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
 A=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT"); sleep 20
 B=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT")
 echo "CPU over 20s: $(( (B-A)/1000000 )) ms  → $(( (B-A)/200000000 ))% of one core"
@@ -376,7 +378,7 @@ Expected: a PID.
 - [ ] **Step 5: Verify CPU did not spike — the freeze-bug gate**
 
 ```bash
-WB_UNIT=$(systemctl --user list-units --type=scope --plain --no-legend 'app-Hyprland-waybar-*' | awk '{print $1}')
+WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
 A=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT"); sleep 20
 B=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT")
 echo "CPU over 20s: $(( (B-A)/1000000 )) ms  → $(( (B-A)/200000000 ))% of one core"
