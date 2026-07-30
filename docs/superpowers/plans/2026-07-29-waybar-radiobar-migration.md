@@ -19,6 +19,7 @@ Spec: `docs/superpowers/specs/2026-07-29-waybar-radiobar-migration-design.md`
 - **`size: 20` for the art** — bar `height` is 26; stay a few px under.
 - **waybar does NOT auto-reload.** Every config change needs `omarchy restart waybar`.
 - **waybar's stderr is unreadable on this system** — its transient scope logs nothing to the journal and Hyprland's log has no waybar lines. Verify health by process liveness + CPU-time delta, never by grepping logs.
+- **Always derive waybar's systemd scope from the live PID's cgroup**, using the exact `WB_UNIT=` line given in the steps below. Do not substitute `systemctl --user list-units 'app-Hyprland-waybar-*'` (an mpv orphaned from a previous waybar keeps that old scope alive, so the glob returns two names), and keep both `pgrep -xo` (a bare `-x` expands to a multi-PID path that does not exist) and the `awk` line-selection (`cut -d: -f3` returns every controller's path on cgroup v1, silently yielding a wrong-but-plausible unit name). A malformed `$WB_UNIT` makes every CPU number in this plan meaningless.
 - **Never edit anything under `~/.local/share/omarchy/`.** Reading is fine.
 - **No per-task git commits.** Every deliverable in Tasks 1–4 lives in `~/.config` or `~/.local/bin`, outside this repo. The repo's only changes are this plan and the spec (`61544aa`).
 
@@ -73,7 +74,8 @@ Expected: three files created. Record the printed `$TS` value — later rollback
 - [ ] **Step 3: Record the waybar CPU-time baseline**
 
 ```bash
-WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
+WB_UNIT=$(basename "$(awk -F: '$1=="0" || $2=="name=systemd" {print $3; exit}' \
+                      /proc/"$(pgrep -xo waybar)"/cgroup)")
 echo "unit=$WB_UNIT"
 systemctl --user show -p CPUUsageNSec --value "$WB_UNIT"
 ```
@@ -252,7 +254,8 @@ Expected: a PID. If waybar is dead, the JSONC is malformed (likely a stray or mi
 - [ ] **Step 7: Verify the module is actually running, not just present**
 
 ```bash
-WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
+WB_UNIT=$(basename "$(awk -F: '$1=="0" || $2=="name=systemd" {print $3; exit}' \
+                      /proc/"$(pgrep -xo waybar)"/cgroup)")
 systemctl --user status "$WB_UNIT" --no-pager | grep -A6 CGroup
 ```
 
@@ -261,7 +264,8 @@ Expected: the cgroup lists `/usr/bin/waybar` plus a `python3 .../radiobar status
 - [ ] **Step 8: Verify CPU is sane and screenshot the bar**
 
 ```bash
-WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
+WB_UNIT=$(basename "$(awk -F: '$1=="0" || $2=="name=systemd" {print $3; exit}' \
+                      /proc/"$(pgrep -xo waybar)"/cgroup)")
 A=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT"); sleep 20
 B=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT")
 echo "CPU over 20s: $(( (B-A)/1000000 )) ms  → $(( (B-A)/200000000 ))% of one core"
@@ -378,7 +382,8 @@ Expected: a PID.
 - [ ] **Step 5: Verify CPU did not spike — the freeze-bug gate**
 
 ```bash
-WB_UNIT=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
+WB_UNIT=$(basename "$(awk -F: '$1=="0" || $2=="name=systemd" {print $3; exit}' \
+                      /proc/"$(pgrep -xo waybar)"/cgroup)")
 A=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT"); sleep 20
 B=$(systemctl --user show -p CPUUsageNSec --value "$WB_UNIT")
 echo "CPU over 20s: $(( (B-A)/1000000 )) ms  → $(( (B-A)/200000000 ))% of one core"

@@ -178,7 +178,8 @@ Run in order; each step gates the next.
 5. Sample the CPU-time delta over a 20s window — this, not a log, is what
    catches the `interval` freeze, whose signature is ~50% of a core:
 
-       U=$(basename "$(cut -d: -f3 /proc/$(pgrep -x waybar)/cgroup)")
+       U=$(basename "$(awk -F: '$1=="0" || $2=="name=systemd" {print $3; exit}' \
+                       /proc/"$(pgrep -xo waybar)"/cgroup)")
        A=$(systemctl --user show -p CPUUsageNSec --value "$U"); sleep 20
        B=$(systemctl --user show -p CPUUsageNSec --value "$U")
        echo "$(( (B-A)/1000000 )) ms over 20s"
@@ -190,6 +191,20 @@ Run in order; each step gates the next.
    and because mpv survives a waybar restart it keeps that old scope alive.
    The glob then returns two unit names, `$U` becomes malformed, and the
    measurement is silently wrong. Observed in practice on 2026-07-29.
+
+   Three details in that one-liner are all load-bearing:
+
+   - `pgrep -xo`, not `-x`: with two waybar instances the bare form expands to
+     `/proc/<pid1>\n<pid2>/cgroup`, which does not exist. `-o` picks the oldest,
+     making the choice deterministic. If you deliberately run more than one
+     waybar, substitute the pid you actually mean.
+   - The `awk` selects the unified (`0::`) or `name=systemd` line rather than
+     `cut -d: -f3` taking all of them. On cgroup v1 `/proc/<pid>/cgroup` has one
+     line per controller, and `cut` would return the *first* controller's path —
+     yielding a plausible-looking but wrong unit name rather than an error.
+     (Arch is cgroup v2, where the file is a single `0::` line, so this only
+     matters if the docs are followed on an older or non-default setup.)
+   - `systemctl --user`, not system scope: waybar runs in the user manager.
 6. Screenshot the bar to confirm the module and thumbnail render and that
    glyph style matches its neighbors. Note that eyeballing the marquee only
    proves stability if the title actually exceeds the scroll window — verify
