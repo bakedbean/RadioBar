@@ -3,6 +3,8 @@ import importlib.machinery
 import importlib.util
 import json
 import pathlib
+import pytest
+import re
 import socketserver
 import sys
 import threading
@@ -30,6 +32,17 @@ def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify"):
             "station": None}
 
 
+@pytest.fixture(autouse=True)
+def _default_scroll_width(monkeypatch):
+    """Pin the marquee width to its default for every test.
+
+    Without this, a developer who exports RADIOBAR_SCROLL_WINDOW changes the
+    width the Renderer picks up and silently breaks assertions that assume
+    the 30-char default. Tests wanting an override set it themselves.
+    """
+    monkeypatch.delenv("RADIOBAR_SCROLL_WINDOW", raising=False)
+
+
 def _radio_active(playing=True, title="A - B", station="FIP"):
     return {"source": "radio", "player": None, "playing": playing,
             "artist": None, "title": title, "art_url": None,
@@ -44,6 +57,63 @@ class TestScrollWindow:
         assert rb.scroll_window(text, 6, 8) == "89" + rb.SCROLL_PAD[:4]
         # offset wraps modulo len(text) + len(pad) = 17
         assert rb.scroll_window(text, 6, 17) == rb.scroll_window(text, 6, 0)
+
+
+def _shown(out: dict) -> str:
+    """The marquee body out of a render()'s pango payload."""
+    return re.search(r"<span foreground='[^']*'>([^<]*)</span>$",
+                     out["text"]).group(1)
+
+
+class TestScrollWidth:
+    def test_defaults_to_scroll_window_when_unset(self, monkeypatch):
+        monkeypatch.delenv("RADIOBAR_SCROLL_WINDOW", raising=False)
+        assert rb.scroll_width() == rb.SCROLL_WINDOW
+
+    def test_env_override_is_used(self, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_SCROLL_WINDOW", "25")
+        assert rb.scroll_width() == 25
+
+    def test_below_minimum_falls_back_and_warns(self, monkeypatch, capsys):
+        # <= len(SCROLL_PAD) would let the seam fill the whole window,
+        # hiding the title entirely at some offsets.
+        monkeypatch.setenv("RADIOBAR_SCROLL_WINDOW",
+                           str(rb.SCROLL_WINDOW_MIN - 1))
+        assert rb.scroll_width() == rb.SCROLL_WINDOW
+        assert "RADIOBAR_SCROLL_WINDOW" in capsys.readouterr().err
+
+    def test_non_integer_falls_back_and_warns(self, monkeypatch, capsys):
+        monkeypatch.setenv("RADIOBAR_SCROLL_WINDOW", "wide")
+        assert rb.scroll_width() == rb.SCROLL_WINDOW
+        assert "RADIOBAR_SCROLL_WINDOW" in capsys.readouterr().err
+
+    def test_minimum_exceeds_pad_so_title_always_visible(self):
+        assert rb.SCROLL_WINDOW_MIN > len(rb.SCROLL_PAD)
+
+    def test_renderer_scrolls_title_only_the_override_overflows(
+            self, monkeypatch):
+        body = "x" * 25            # under the default 30, over an override 20
+        monkeypatch.delenv("RADIOBAR_SCROLL_WINDOW", raising=False)
+        default = rb.Renderer(choose=lambda colors: colors[0])
+        out = default.render(_radio_active(title=body))
+        assert _shown(out) == body, "25 chars must not scroll at default 30"
+        assert default.needs_tick() is False
+
+        monkeypatch.setenv("RADIOBAR_SCROLL_WINDOW", "20")
+        narrow = rb.Renderer(choose=lambda colors: colors[0])
+        out = narrow.render(_radio_active(title=body))
+        assert len(_shown(out)) == 20, "must render exactly the override width"
+        assert narrow.needs_tick() is True
+
+    def test_override_window_is_constant_across_a_full_cycle(
+            self, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_SCROLL_WINDOW", "25")
+        body = "y" * 40
+        r = rb.Renderer(choose=lambda colors: colors[0])
+        active = _radio_active(title=body)
+        widths = {len(_shown(r.render(active)))
+                  for _ in range(len(body) + len(rb.SCROLL_PAD) + 5)}
+        assert widths == {25}, f"window width varied: {widths}"
 
 
 class TestPlayerIcon:

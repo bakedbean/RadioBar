@@ -28,8 +28,11 @@ ICON_IDLE = "\U000f0439"   # 󰐹
 
 STOP_ENTRY = "■ Stop radio"
 
-SCROLL_WINDOW = 30
+SCROLL_WINDOW = 30        # default; override with RADIOBAR_SCROLL_WINDOW
 SCROLL_PAD = "   •   "
+# A window no wider than the seam pad could render as pad alone at some
+# offsets, hiding the title outright — so overrides must exceed len(SCROLL_PAD).
+SCROLL_WINDOW_MIN = len(SCROLL_PAD) + 1
 PAUSE_TICKS = 4           # 1 s of hold at TICK_SECONDS per step
 # 4 Hz, not 10: waybar forwards every status line this script prints
 # into its glibmm dispatcher pipe (dp.emit() in its custom module), and
@@ -448,6 +451,32 @@ def pick_title(icy_title, media_title, station_name) -> str:
     return station_name
 
 
+def scroll_width() -> int:
+    """Marquee width in characters, from RADIOBAR_SCROLL_WINDOW.
+
+    Narrow it on small displays so the module stops crowding neighbouring
+    waybar sections; the full title stays in the tooltip either way. Bad
+    values warn and fall back rather than breaking the bar — note waybar
+    discards this script's stderr, so the warning is only visible when
+    `radiobar status` is run by hand.
+    """
+    raw = os.environ.get("RADIOBAR_SCROLL_WINDOW")
+    if raw is None:
+        return SCROLL_WINDOW
+    try:
+        width = int(raw)
+    except ValueError:
+        print(f"radiobar: bad RADIOBAR_SCROLL_WINDOW ({raw!r}), "
+              f"using {SCROLL_WINDOW}", file=sys.stderr)
+        return SCROLL_WINDOW
+    if width < SCROLL_WINDOW_MIN:
+        print(f"radiobar: RADIOBAR_SCROLL_WINDOW={width} is below the "
+              f"minimum {SCROLL_WINDOW_MIN}, using {SCROLL_WINDOW}",
+              file=sys.stderr)
+        return SCROLL_WINDOW
+    return width
+
+
 def scroll_window(text: str, width: int, offset: int) -> str:
     padded = text + SCROLL_PAD + text
     start = offset % (len(text) + len(SCROLL_PAD))
@@ -472,11 +501,14 @@ class Renderer:
 
     Holds scroll offset/hold state and the current track's color pair;
     render() advances the scroll one step per call while the body
-    overflows SCROLL_WINDOW.
+    overflows the scroll width.
     """
 
     def __init__(self, choose=random.choice):
         self.choose = choose
+        # Read once: a process's environment cannot change under it, and
+        # waybar re-spawns `radiobar status` when its config is reloaded.
+        self.width = scroll_width()
         self.key = None
         self.offset = 0
         self.pause_ticks = 0
@@ -502,13 +534,13 @@ class Renderer:
             self.pause_ticks = PAUSE_TICKS
             self.icon_color = self.choose(COLORS)
             self.text_color = self.choose(COLORS)
-        if len(body) > SCROLL_WINDOW:
+        if len(body) > self.width:
             # Paused -> no marquee: snap to the title head and hold there;
             # resume restarts the normal hold-then-scroll cycle.
             if not active["playing"]:
                 self.offset = 0
                 self.pause_ticks = PAUSE_TICKS
-            shown = scroll_window(body, SCROLL_WINDOW, self.offset)
+            shown = scroll_window(body, self.width, self.offset)
             if active["playing"]:
                 if self.pause_ticks > 0:
                     self.pause_ticks -= 1
@@ -534,7 +566,7 @@ class Renderer:
 
     def needs_tick(self) -> bool:
         return (self.playing and self.key is not None
-                and len(self.key[2]) > SCROLL_WINDOW)
+                and len(self.key[2]) > self.width)
 
 
 IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,
