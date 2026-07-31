@@ -89,12 +89,35 @@ struct Station: Identifiable, Codable, Equatable {
 struct StationStore {
     private static let fileName = "stations.json"
 
+    /// Built-ins whose name isn't already in `saved`, appended in built-in
+    /// order. Matched on name, case-insensitively — the same key the Linux
+    /// port's `find_station` uses. Matching on `streamURL` instead would let
+    /// an upstream URL change produce two stations sharing a lookup name.
+    ///
+    /// Append-only by design: a built-in already present keeps whatever the
+    /// user has saved for it, including a hand-edited URL.
+    static func merging(_ builtIn: [Station], into saved: [Station]) -> [Station] {
+        let have = Set(saved.map { $0.name.lowercased() })
+        return saved + builtIn.filter { !have.contains($0.name.lowercased()) }
+    }
+
     static func load() -> [Station] {
         guard let url = storeURL else { return Station.builtIn }
         guard let data = try? Data(contentsOf: url),
-              let stations = try? JSONDecoder().decode([Station].self, from: data)
+              let saved = try? JSONDecoder().decode([Station].self, from: data)
+        // Unreadable or corrupt: fall back in memory but leave the file
+        // alone, so the user can still repair it.
         else { return Station.builtIn }
-        return stations
+
+        // Stations added to `builtIn` in a later release reach existing
+        // installs here — the file is only *seeded* on first run, so without
+        // this they would never appear.
+        let merged = merging(Station.builtIn, into: saved)
+        // Sound only because merging is append-only: were it ever to edit
+        // entries in place, the count would stop changing when content does
+        // and this would silently stop persisting.
+        if merged.count != saved.count { save(merged) }
+        return merged
     }
 
     static func save(_ stations: [Station]) {
