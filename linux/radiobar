@@ -143,8 +143,14 @@ def load_stations() -> list:
         return list(BUILTIN_STATIONS)
     try:
         data = json.loads(path.read_text())
-        if (isinstance(data, list) and data
-                and all(isinstance(s, dict) and "name" in s and "streamURL" in s
+        # An empty list is valid, not corrupt — merge_builtins heals it below.
+        # name/streamURL must be strings: merge_builtins and find_station both
+        # call .lower() on the name, and a non-string URL would otherwise be
+        # handed to the player untouched.
+        if (isinstance(data, list)
+                and all(isinstance(s, dict)
+                        and isinstance(s.get("name"), str)
+                        and isinstance(s.get("streamURL"), str)
                         for s in data)):
             # Stations added to BUILTIN_STATIONS in a later release reach
             # existing installs here — the file is only seeded on first run.

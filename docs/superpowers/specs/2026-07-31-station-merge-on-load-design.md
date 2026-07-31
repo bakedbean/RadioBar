@@ -79,6 +79,14 @@ matches `find_station` exactly. Extract the decision as a pure
 `try/except OSError` and report to stderr on failure, matching how the existing
 seed path degrades.
 
+The shape gate needs two corrections to support this. It must accept an empty
+list — `[]` is a valid state that merging heals, not corruption, and rejecting
+it means a permanent `bad stations.json` warning on every invocation plus a
+file that never gets repaired. And it must require `name` and `streamURL` to
+be *strings*, not merely present: `merge_builtins` and `find_station` both call
+`.lower()` on the name, and a non-string `streamURL` would otherwise pass
+straight through to the player.
+
 ## Testing
 
 Tests first. Cases, applied to both platforms:

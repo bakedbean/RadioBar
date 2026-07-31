@@ -346,6 +346,33 @@ class TestLoadStationsRewrite:
         finally:
             path.chmod(0o644)
 
+    def test_empty_list_heals_and_is_rewritten(self, tmp_path, monkeypatch,
+                                               capsys):
+        # An empty but well-formed list is a valid state, not corruption:
+        # heal it silently and persist, matching what macOS does.
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        path.write_text("[]")
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+        assert json.loads(path.read_text()) == rb.BUILTIN_STATIONS
+        assert capsys.readouterr().err == ""
+
+    def test_non_string_name_falls_back(self, tmp_path, monkeypatch):
+        # merge_builtins and find_station both call .lower() on these, so the
+        # shape gate has to reject non-strings rather than let them through.
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        bad = json.dumps([{"name": 123, "streamURL": "https://x/s"}])
+        path.write_text(bad)
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+        assert path.read_text() == bad
+
+    def test_non_string_url_falls_back(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        path.write_text(json.dumps([{"name": "X", "streamURL": None}]))
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+
     def test_corrupt_file_left_on_disk(self, tmp_path, monkeypatch):
         # Falling back in memory is right; overwriting would destroy a file
         # the user may want to repair.
