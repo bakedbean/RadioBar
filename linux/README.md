@@ -70,7 +70,17 @@ duplicate now-playing info in the bar.
 | Switch station / stop radio | Right-click the module — shows `■ Stop radio` first while radio is running |
 | Next track (MPRIS only) | `radiobar next` (bind to a hotkey if you want one) |
 | Add a station | Edit `~/.config/radiobar/stations.json` (same schema as the macOS app) |
+| Remove a station | Edit the same file — but see the note below |
 | Stop radio | `radiobar stop` |
+
+**Built-in stations are topped up on load.** Any station in
+`BUILTIN_STATIONS` that your `stations.json` doesn't already have — matched
+on name, case-insensitively — is appended and the file is rewritten, so
+stations added in a new release actually reach you. Your own entries, their
+order, and any URL you've edited on a built-in are all left alone. The
+consequence: you can't remove a built-in permanently. Deleting it puts it
+back on the next load, and renaming it re-adds the original alongside your
+renamed copy. You can repoint a built-in's `streamURL`, but not drop it.
 
 The bar shows exactly one source at a time: radio whenever it's audible,
 otherwise the most relevant MPRIS player (the one that's playing; if

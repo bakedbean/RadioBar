@@ -42,6 +42,8 @@ test:
 	./$(BUILD_DIR)/trackclassifier-tests
 	swiftc -o $(BUILD_DIR)/htmlentities-tests Sources/HTMLEntities.swift Tests/HTMLEntitiesTests.swift
 	./$(BUILD_DIR)/htmlentities-tests
+	swiftc -o $(BUILD_DIR)/stationmerge-tests Sources/Station.swift Tests/StationMergeTests.swift
+	./$(BUILD_DIR)/stationmerge-tests
 
 clean:
 	rm -rf $(BUILD_DIR)

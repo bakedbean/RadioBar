@@ -237,12 +237,15 @@ class TestLoadStations:
         seeded = json.loads((tmp_path / "stations.json").read_text())
         assert seeded == rb.BUILTIN_STATIONS
 
-    def test_valid_file_is_loaded(self, tmp_path, monkeypatch):
+    def test_valid_file_is_loaded_then_builtins_appended(
+            self, tmp_path, monkeypatch):
+        # The user's entries come first, in their order; built-ins they don't
+        # have yet are appended so a new release's stations actually reach them.
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
         mine = [{"name": "X", "streamURL": "https://x/s", "genre": "g",
                  "websiteURL": None}]
         (tmp_path / "stations.json").write_text(json.dumps(mine))
-        assert rb.load_stations() == mine
+        assert rb.load_stations() == mine + rb.BUILTIN_STATIONS
 
     def test_malformed_file_falls_back_to_builtins(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
@@ -265,6 +268,119 @@ class TestLoadStations:
             assert rb.load_stations() == rb.BUILTIN_STATIONS
         finally:
             readonly_parent.chmod(0o755)
+
+
+class TestMergeBuiltins:
+    """Pure merge decision: append built-ins the saved list lacks, by name."""
+
+    def _s(self, name):
+        return {"name": name, "streamURL": f"https://example.test/{name}",
+                "genre": "Test", "websiteURL": None}
+
+    def test_appends_missing_builtin(self, monkeypatch):
+        builtins = [self._s("Alpha"), self._s("Beta")]
+        monkeypatch.setattr(rb, "BUILTIN_STATIONS", builtins)
+        assert rb.merge_builtins([self._s("Alpha")]) == builtins
+
+    def test_complete_list_unchanged(self, monkeypatch):
+        builtins = [self._s("Alpha"), self._s("Beta")]
+        monkeypatch.setattr(rb, "BUILTIN_STATIONS", builtins)
+        assert rb.merge_builtins(builtins) == builtins
+
+    def test_case_insensitive_no_duplicate(self, monkeypatch):
+        # Must match find_station's .lower() comparison, or a case variant
+        # would produce two stations sharing a lookup key.
+        monkeypatch.setattr(rb, "BUILTIN_STATIONS", [self._s("Alpha")])
+        saved = [self._s("ALPHA")]
+        assert rb.merge_builtins(saved) == saved
+
+    def test_user_stations_and_order_preserved(self, monkeypatch):
+        monkeypatch.setattr(rb, "BUILTIN_STATIONS",
+                            [self._s("Alpha"), self._s("Beta")])
+        merged = rb.merge_builtins([self._s("Mine"), self._s("Beta")])
+        assert [s["name"] for s in merged] == ["Mine", "Beta", "Alpha"]
+
+    def test_empty_list_heals(self, monkeypatch):
+        builtins = [self._s("Alpha")]
+        monkeypatch.setattr(rb, "BUILTIN_STATIONS", builtins)
+        assert rb.merge_builtins([]) == builtins
+
+    def test_does_not_mutate_input(self, monkeypatch):
+        monkeypatch.setattr(rb, "BUILTIN_STATIONS", [self._s("Alpha")])
+        saved = [self._s("Mine")]
+        rb.merge_builtins(saved)
+        assert saved == [self._s("Mine")]
+
+
+class TestLoadStationsRewrite:
+    """File-level side effects of merge-on-load."""
+
+    def test_file_rewritten_when_builtin_added(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        mine = [{"name": "X", "streamURL": "https://x/s", "genre": "g",
+                 "websiteURL": None}]
+        path.write_text(json.dumps(mine))
+        rb.load_stations()
+        assert json.loads(path.read_text()) == mine + rb.BUILTIN_STATIONS
+
+    def test_file_untouched_when_nothing_to_add(self, tmp_path, monkeypatch):
+        # Written compactly: if load_stations rewrote it, json.dumps(indent=2)
+        # would reformat and the byte comparison would fail.
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        compact = json.dumps(rb.BUILTIN_STATIONS)
+        path.write_text(compact)
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+        assert path.read_text() == compact
+
+    def test_unwritable_file_still_returns_merged(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        mine = [{"name": "X", "streamURL": "https://x/s", "genre": "g",
+                 "websiteURL": None}]
+        path.write_text(json.dumps(mine))
+        path.chmod(0o444)
+        try:
+            assert rb.load_stations() == mine + rb.BUILTIN_STATIONS
+        finally:
+            path.chmod(0o644)
+
+    def test_empty_list_heals_and_is_rewritten(self, tmp_path, monkeypatch,
+                                               capsys):
+        # An empty but well-formed list is a valid state, not corruption:
+        # heal it silently and persist, matching what macOS does.
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        path.write_text("[]")
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+        assert json.loads(path.read_text()) == rb.BUILTIN_STATIONS
+        assert capsys.readouterr().err == ""
+
+    def test_non_string_name_falls_back(self, tmp_path, monkeypatch):
+        # merge_builtins and find_station both call .lower() on these, so the
+        # shape gate has to reject non-strings rather than let them through.
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        bad = json.dumps([{"name": 123, "streamURL": "https://x/s"}])
+        path.write_text(bad)
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+        assert path.read_text() == bad
+
+    def test_non_string_url_falls_back(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        path.write_text(json.dumps([{"name": "X", "streamURL": None}]))
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+
+    def test_corrupt_file_left_on_disk(self, tmp_path, monkeypatch):
+        # Falling back in memory is right; overwriting would destroy a file
+        # the user may want to repair.
+        monkeypatch.setenv("RADIOBAR_CONFIG_DIR", str(tmp_path))
+        path = tmp_path / "stations.json"
+        path.write_text("{not json")
+        assert rb.load_stations() == rb.BUILTIN_STATIONS
+        assert path.read_text() == "{not json"
 
 
 class TestFindStation:

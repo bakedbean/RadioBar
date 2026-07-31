@@ -116,6 +116,21 @@ def stations_path() -> Path:
     return config_dir() / "stations.json"
 
 
+def merge_builtins(saved: list) -> list:
+    """Built-ins the saved list lacks, appended in built-in order.
+
+    Matched on name, case-insensitively — the same comparison find_station
+    uses. Matching on streamURL instead would let an upstream URL change
+    produce two stations sharing a lookup name.
+
+    Append-only: a built-in already present keeps whatever the user has
+    saved for it, including a hand-edited URL.
+    """
+    have = {s["name"].lower() for s in saved}
+    return saved + [s for s in BUILTIN_STATIONS
+                    if s["name"].lower() not in have]
+
+
 def load_stations() -> list:
     path = stations_path()
     if not path.exists():
@@ -128,10 +143,26 @@ def load_stations() -> list:
         return list(BUILTIN_STATIONS)
     try:
         data = json.loads(path.read_text())
-        if (isinstance(data, list) and data
-                and all(isinstance(s, dict) and "name" in s and "streamURL" in s
+        # An empty list is valid, not corrupt — merge_builtins heals it below.
+        # name/streamURL must be strings: merge_builtins and find_station both
+        # call .lower() on the name, and a non-string URL would otherwise be
+        # handed to the player untouched.
+        if (isinstance(data, list)
+                and all(isinstance(s, dict)
+                        and isinstance(s.get("name"), str)
+                        and isinstance(s.get("streamURL"), str)
                         for s in data)):
-            return data
+            # Stations added to BUILTIN_STATIONS in a later release reach
+            # existing installs here — the file is only seeded on first run.
+            merged = merge_builtins(data)
+            # Append-only, so a longer list is exactly "something was added".
+            if len(merged) != len(data):
+                try:
+                    path.write_text(json.dumps(merged, indent=2) + "\n")
+                except OSError as exc:
+                    print(f"radiobar: can't update stations.json ({exc})",
+                          file=sys.stderr)
+            return merged
         raise ValueError("unexpected shape")
     except Exception as exc:
         print(f"radiobar: bad stations.json ({exc}), using built-ins",
