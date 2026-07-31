@@ -33,6 +33,12 @@ Most menubar radio apps (Triode, etc.) hide track info behind a dropdown. RadioB
 | FIP | Eclectic |
 | Radio Paradise: Main Mix | Eclectic |
 
+Your station list lives in `~/Library/Application Support/RadioBar/stations.json`.
+Built-ins added in a later release are appended to it on launch — matched on
+name, case-insensitively — so new stations reach existing installs. Stations
+you add yourself, their order, and any edits you've made to a built-in are
+left untouched.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
