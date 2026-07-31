@@ -23,6 +23,18 @@ struct Station: Identifiable, Codable, Equatable {
             websiteURL: "https://kexp.org"
         ),
         Station(
+            name: "WXPN 88.5 FM",
+            streamURL: "https://wxpnhi.xpn.org/xpnhi",
+            genre: "College/AAA",
+            websiteURL: "https://xpn.org"
+        ),
+        Station(
+            name: "WXPN: XPN2",
+            streamURL: "https://wxpn.xpn.org/xpn2mp3hi",
+            genre: "College/Eclectic",
+            websiteURL: "https://xpn.org/program/xpn2/"
+        ),
+        Station(
             name: "SomaFM: Groove Salad",
             streamURL: "https://ice3.somafm.com/groovesalad-256-mp3",
             genre: "Ambient/Downtempo",

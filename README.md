@@ -9,7 +9,7 @@ Most menubar radio apps (Triode, etc.) hide track info behind a dropdown. RadioB
 ## Features
 
 - Live track info in the menubar title (artist – song)
-- 10 built-in stations (WERS, KEXP, SomaFM, BBC 6, NTS, FIP, Radio Paradise)
+- 12 built-in stations (WERS, KEXP, WXPN, SomaFM, BBC 6, NTS, FIP, Radio Paradise)
 - Add your own stations via stream URL
 - Play/pause, volume control
 - Global play/pause hotkey: <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>Space</kbd> (works from any app)
@@ -22,6 +22,8 @@ Most menubar radio apps (Triode, etc.) hide track info behind a dropdown. RadioB
 |---------|-------|
 | WERS 88.9 FM | College/Eclectic |
 | KEXP 90.3 FM | Eclectic |
+| WXPN 88.5 FM | College/AAA |
+| WXPN: XPN2 | College/Eclectic |
 | SomaFM: Groove Salad | Ambient/Downtempo |
 | SomaFM: Secret Agent | Spy/Lounge |
 | SomaFM: Drone Zone | Ambient/Drone |
