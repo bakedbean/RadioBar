@@ -103,11 +103,12 @@ sources, the leading icon identifies the player
 everything's off.
 
 **Track progress line**: while a Spotify (or any MPRIS) track that reports
-its length is playing, a one-pixel line under the title grows from left to
+its length and position is playing, a one-pixel line under the title grows from left to
 right and spans the module when the track ends. It reflects the player's
 own position, so seeking moves it within a second. Radio streams have no
 length and draw no line; neither do browser tabs or live streams that
-report none, and the line is hidden while paused. One caveat: playerctl's
+report none (a player with a length but no position shows an empty line at
+0%), and the line is hidden while paused. One caveat: playerctl's
 once-a-second position tick goes to a single player (the first in its
 list that prints anything, normally the one that most recently started
 playing), so with two players playing at once the shown track's line may
@@ -206,7 +207,9 @@ line (no polling, no extra processes). A line that changed only in
 position wakes the render loop but does not count as player activity for
 the arbiter's recency tie-break, does not step the marquee (scroll steps
 stay on their own 4 Hz deadline), and produces no output at all unless
-the rendered JSON actually changed. The percent played becomes a `pNN`
+the rendered JSON actually changed. The module's JSON `class` field is
+now always an array (waybar accepts either form): the percent played
+becomes a `pNN`
 CSS class next to `playing`, a `progress` marker, and a `c<hex>` class
 carrying the title's colour; `style-snippet.css` carries one
 hard-stop-gradient rule per percent, drawn with `currentColor`, plus one

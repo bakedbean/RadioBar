@@ -170,9 +170,11 @@ class TestRenderer:
         long = _mpris_active(artist=None, title="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef")
         r.render(long)
         assert r.needs_tick() is True
-        # first PAUSE_TICKS renders hold the window at offset 0
+        # the first PAUSE_TICKS renders (1 s at 4 Hz) hold the window at
+        # offset 0; the step happens before `shown` is built, so the
+        # (PAUSE_TICKS + 1)th render is the first to move
         first = r.render(long)["text"]
-        for _ in range(rb.PAUSE_TICKS - 1):
+        for _ in range(rb.PAUSE_TICKS - 2):
             held = r.render(long)["text"]
         assert held == first
         moved = r.render(long)["text"]
@@ -199,9 +201,10 @@ class TestRenderer:
             r.render(playing)
         r.render(_mpris_active(artist=None, title=title, playing=False))
         first = r.render(playing)["text"]
-        # offset advances after `shown` is computed, so the hold spans
-        # PAUSE_TICKS further renders before the window visibly moves
-        for _ in range(rb.PAUSE_TICKS):
+        # the step happens before `shown` is built, so the hold spans
+        # PAUSE_TICKS renders in total (1 s at 4 Hz) before the window
+        # visibly moves
+        for _ in range(rb.PAUSE_TICKS - 1):
             held = r.render(playing)["text"]
         assert held == first
         assert r.render(playing)["text"] != first
@@ -268,6 +271,22 @@ class TestRenderer:
     def test_progress_class_does_not_leak_into_text_or_tooltip(self):
         out = self._renderer().render(_mpris_active(progress=42))
         assert "p42" not in out["text"] and "42" not in out["tooltip"]
+
+    def test_non_stepping_render_repeats_the_last_frame_exactly(self):
+        # A position wake (advance=False) between two 4 Hz deadlines must
+        # show the same frame as the deadline before it, not the next one
+        # early — otherwise the marquee still jitters visibly even though
+        # the step count is right.
+        r = self._renderer()
+        active = _mpris_active(artist=None,
+                               title="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef")
+        for _ in range(rb.PAUSE_TICKS + 1):
+            r.render(active)                       # get past the head hold
+        a = r.render(active)["text"]
+        b = r.render(active, advance=False)["text"]
+        c = r.render(active)["text"]
+        d = r.render(active, advance=False)["text"]
+        assert b == a and d == c and c != a
 
     def test_pango_special_chars_escaped(self):
         out = self._renderer().render(
@@ -803,6 +822,25 @@ class TestMprisSource:
         _, players = store.snapshot()
         assert players == {}
         assert "playerctl" in capsys.readouterr().err
+
+    def test_reader_continues_past_a_malformed_numeric_line(self):
+        store = rb.StateStore()
+        seen = []
+        real = store.update_player
+        store.update_player = lambda name, state: (seen.append((name, state)),
+                                                   real(name, state))
+        spawns = []
+
+        def popen(cmd, **kwargs):
+            spawns.append(cmd)
+            if len(spawns) == 1:
+                return _FakeProc(["spotify\tPlaying\tA\tT1\t\tinf\t1e999\n",
+                                  "spotify\tPlaying\tA\tT2\t\t5\t9\n"])
+            raise FileNotFoundError("playerctl")
+
+        rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
+        assert [t for _, st in seen for t in [st["title"]]] == ["T1", "T2"]
+        assert seen[0][1]["length"] is None and seen[1][1]["length"] == 9
 
     def test_oserror_spawn_retries(self):
         store = rb.StateStore()
@@ -1628,6 +1666,14 @@ class TestParsePlayerctlLine:
             "vlc\tPlaying\t\tT\t\t1500000.0\t3000000.5\n")
         assert state == dict(state, position=1_500_000, length=3_000_000)
 
+    def test_non_finite_numbers_are_none(self):
+        # int(float("inf")) raises OverflowError, not ValueError; a player
+        # emitting one of these must not take the reader thread down.
+        for bad in ("inf", "-inf", "1e999", "-1e999"):
+            _, state = rb.parse_playerctl_line(
+                f"vlc\tPlaying\t\tT\t\t{bad}\t{bad}\n")
+            assert state["position"] is None and state["length"] is None, bad
+
     def test_format_field_count_matches_parser(self):
         assert rb.PLAYERCTL_FORMAT.count("\t") == 6
 
@@ -1846,6 +1892,19 @@ class TestStateStore:
         store.update_player("spotify", dict(state))
         assert store.snapshot()[1]["spotify"]["seq"] == seq1
         assert not store.changed.is_set()
+
+    def test_length_only_change_keeps_seq(self):
+        # A player swapping its reported length (e.g. Spotify settling on
+        # the real duration) is progress data, not activity.
+        store = rb.StateStore()
+        state = {"status": "Playing", "artist": None, "title": "T",
+                 "art_url": None, "position": 5, "length": 9}
+        store.update_player("spotify", state)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.changed.clear()
+        store.update_player("spotify", dict(state, length=10))
+        assert store.snapshot()[1]["spotify"]["seq"] == seq1
+        assert store.changed.is_set()
 
     def test_status_change_with_new_position_still_bumps_seq(self):
         store = rb.StateStore()

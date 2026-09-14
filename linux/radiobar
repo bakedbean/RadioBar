@@ -577,8 +577,7 @@ class Renderer:
             if not active["playing"]:
                 self.offset = 0
                 self.pause_ticks = PAUSE_TICKS
-            shown = scroll_window(body, self.width, self.offset)
-            if active["playing"] and advance:
+            elif advance:
                 if self.pause_ticks > 0:
                     self.pause_ticks -= 1
                 else:
@@ -586,6 +585,10 @@ class Renderer:
                     if self.offset >= len(body) + len(SCROLL_PAD):
                         self.offset = 0
                         self.pause_ticks = PAUSE_TICKS
+            # Step first, then render: `offset` is always the frame on
+            # screen, so a non-advancing redraw repeats it exactly instead
+            # of showing the next frame early.
+            shown = scroll_window(body, self.width, self.offset)
         else:
             shown = body
         if active["source"] == "radio":
@@ -713,7 +716,7 @@ def _micros(field: str):
     for conv in (int, lambda f: int(float(f))):
         try:
             return conv(field)
-        except ValueError:
+        except (ValueError, OverflowError):   # "nan" / "inf", "1e999"
             pass
     return None
 
@@ -749,8 +752,10 @@ class StateStore:
     """Thread-safe holder for radio + MPRIS player state.
 
     Watcher threads mutate it; the render loop reads snapshots. Every
-    mutation stamps a monotonic seq (recency for the arbiter tie-break —
-    deliberately not wall-clock) and sets `changed`.
+    state change stamps a monotonic seq (recency for the arbiter tie-break
+    — deliberately not wall-clock) and sets `changed`, except that a
+    player update differing only in position/length keeps its seq (it is
+    progress, not activity) and an identical re-emit is a no-op.
     """
 
     def __init__(self):
