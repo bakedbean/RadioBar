@@ -1617,14 +1617,14 @@ class TestParsePlayerctlLine:
 
     def test_position_and_length_are_none_when_unreported(self):
         # Browser tabs / live streams leave position and length blank.
-        name, state = rb.parse_playerctl_line(
+        _, state = rb.parse_playerctl_line(
             "firefox\tPlaying\t\tLive\t\t\t\n")
         assert state["position"] is None and state["length"] is None
 
     def test_float_formatted_length_is_truncated_to_int(self):
         # Some players type mpris:length as a double; playerctl prints it
         # as a float string.
-        name, state = rb.parse_playerctl_line(
+        _, state = rb.parse_playerctl_line(
             "vlc\tPlaying\t\tT\t\t1500000.0\t3000000.5\n")
         assert state == dict(state, position=1_500_000, length=3_000_000)
 
@@ -1632,7 +1632,7 @@ class TestParsePlayerctlLine:
         assert rb.PLAYERCTL_FORMAT.count("\t") == 6
 
     def test_non_numeric_position_or_length_is_none(self):
-        name, state = rb.parse_playerctl_line(
+        _, state = rb.parse_playerctl_line(
             "vlc\tPlaying\t\tT\t\tnan\t-\n")
         assert state["position"] is None and state["length"] is None
 
