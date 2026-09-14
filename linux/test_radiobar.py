@@ -224,15 +224,31 @@ class TestRenderer:
 
     def test_progress_adds_zero_padded_percent_class_while_playing(self):
         out = self._renderer().render(_mpris_active(progress=7))
-        assert out["class"] == ["playing", "progress", "p07"]
+        assert out["class"] == ["playing", "progress", "cf5c402", "p07"]
         out = self._renderer().render(_mpris_active(progress=100))
-        assert out["class"] == ["playing", "progress", "p100"]
+        assert out["class"] == ["playing", "progress", "cf5c402", "p100"]
+
+    def test_progress_colour_class_follows_the_title_colour(self):
+        # The line is drawn with currentColor, so the class carries the
+        # title's (randomly chosen) colour, lowercased, without the '#'.
+        r = rb.Renderer(choose=lambda colors: "#85C1DC")
+        out = r.render(_mpris_active(progress=50))
+        assert "c85c1dc" in out["class"]
+        assert "<span foreground='#85C1DC'>" in out["text"]
 
     def test_every_emittable_progress_class_has_a_css_rule(self):
         css = (pathlib.Path(__file__).parent / "style-snippet.css").read_text()
         assert "#custom-radio.progress {" in css
+        assert "background-position: left calc(100% - 1px);" in css
         for n in range(101):
-            assert f"#custom-radio.p{n:02d} " in css, n
+            assert (f"#custom-radio.p{n:02d} {{ background-image: "
+                    f"linear-gradient(to right, currentColor {n}%, "
+                    f"transparent {n}%); }}") in css, n
+        for colour in rb.COLORS:
+            hexpart = colour.lstrip("#").lower()
+            assert (f"#custom-radio.c{hexpart} {{ color: #{hexpart}; }}"
+                    in css), colour
+        assert "radiobar_progress" not in css   # superseded by currentColor
 
     def test_advance_false_holds_the_marquee_step(self):
         r = self._renderer()
@@ -2073,7 +2089,8 @@ class TestNowPlaying:
         h.store.update_player("spotify", dict(state, position=50_000_000))
         h.np.tick()
         assert [e["class"] for e in h.emitted] == [
-            ["playing", "progress", "p25"], ["playing", "progress", "p50"]]
+            ["playing", "progress", "cf5c402", "p25"],
+            ["playing", "progress", "cf5c402", "p50"]]
         assert len(h.worker_calls) == 1   # progress is not a track change
         assert len(h.actives) == 1        # nor an active-file rewrite
 

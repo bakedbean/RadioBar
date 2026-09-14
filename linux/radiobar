@@ -602,8 +602,11 @@ class Renderer:
             # `progress` scopes the shared background sizing rule in
             # style-snippet.css to the moments a line is drawn (so a
             # theme's own module background-image survives otherwise);
+            # c<hex> sets the label's CSS `color`, which the gradient
+            # picks up as currentColor so the line matches the title;
             # pNN selects the gradient whose hard stop is the line's end.
-            classes += ["progress", f"p{active['progress']:02d}"]
+            classes += ["progress", "c" + self.text_color.lstrip("#").lower(),
+                        f"p{active['progress']:02d}"]
         return {"text": text, "tooltip": f"{body}\n{subtitle}",
                 "class": classes, "markup": "pango"}
 
