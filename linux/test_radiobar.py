@@ -27,10 +27,11 @@ def _load():
 rb = _load()
 
 
-def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify"):
+def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify",
+                  progress=None):
     return {"source": "mpris", "player": player, "playing": playing,
             "artist": artist, "title": title, "art_url": None,
-            "station": None}
+            "station": None, "progress": progress}
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +48,7 @@ def _default_scroll_width(monkeypatch):
 def _radio_active(playing=True, title="A - B", station="FIP"):
     return {"source": "radio", "player": None, "playing": playing,
             "artist": None, "title": title, "art_url": None,
-            "station": station}
+            "station": station, "progress": None}
 
 
 class TestScrollWindow:
@@ -135,11 +136,11 @@ class TestRenderer:
 
     def test_idle(self):
         out = self._renderer().render(dict(rb.IDLE_ACTIVE))
-        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
+        assert out["class"] == ["idle"] and out["text"] == rb.ICON_IDLE
 
     def test_mpris_playing_has_icons_colors_and_tooltip(self):
         out = self._renderer().render(_mpris_active())
-        assert out["class"] == "playing" and out["markup"] == "pango"
+        assert out["class"] == ["playing"] and out["markup"] == "pango"
         assert rb.PLAYER_ICONS["spotify"] in out["text"]
         assert rb.COLORS[0] in out["text"]
         assert "Ar - Ti" in out["text"]
@@ -147,16 +148,16 @@ class TestRenderer:
 
     def test_mpris_paused_appends_status_icon(self):
         out = self._renderer().render(_mpris_active(playing=False))
-        assert out["class"] == "paused"
+        assert out["class"] == ["paused"]
         assert rb.ICON_MPRIS_PAUSED in out["text"]
 
     def test_radio_uses_play_pause_icon_only(self):
         r = self._renderer()
         out = r.render(_radio_active(playing=True))
-        assert rb.ICON_PLAY in out["text"] and out["class"] == "playing"
+        assert rb.ICON_PLAY in out["text"] and out["class"] == ["playing"]
         assert rb.ICON_MPRIS_PAUSED not in out["text"]
         out = r.render(_radio_active(playing=False))
-        assert rb.ICON_PAUSE in out["text"] and out["class"] == "paused"
+        assert rb.ICON_PAUSE in out["text"] and out["class"] == ["paused"]
         assert out["tooltip"] == "A - B\nFIP"
 
     def test_short_title_no_tick_needed(self):
@@ -220,6 +221,20 @@ class TestRenderer:
         b = r.render(_mpris_active(title="y" * 40))  # new track
         # colors advanced: 2 picks per track with our fake chooser
         assert rb.COLORS[0] in a["text"] and rb.COLORS[2] in b["text"]
+
+    def test_progress_adds_zero_padded_percent_class_while_playing(self):
+        out = self._renderer().render(_mpris_active(progress=7))
+        assert out["class"] == ["playing", "p07"]
+        out = self._renderer().render(_mpris_active(progress=100))
+        assert out["class"] == ["playing", "p100"]
+
+    def test_progress_class_omitted_while_paused(self):
+        out = self._renderer().render(_mpris_active(playing=False, progress=42))
+        assert out["class"] == ["paused"]
+
+    def test_progress_class_does_not_leak_into_text_or_tooltip(self):
+        out = self._renderer().render(_mpris_active(progress=42))
+        assert "p42" not in out["text"] and "42" not in out["tooltip"]
 
     def test_pango_special_chars_escaped(self):
         out = self._renderer().render(
@@ -1619,9 +1634,11 @@ def _radio(playing=True, icy="A - B", station="FIP", seq=1):
             "media": None, "station": station, "seq": seq}
 
 
-def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1):
+def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1,
+            position=None, length=None):
     return {"status": status, "artist": artist, "title": title,
-            "art_url": art_url, "seq": seq}
+            "art_url": art_url, "seq": seq, "position": position,
+            "length": length}
 
 
 class TestGuardAction:
@@ -1694,6 +1711,28 @@ class TestArbiter:
                             {"spotify": _player("Paused", seq=2),
                              "firefox": _player("Paused", title="V", seq=5)})
         assert active["player"] == "firefox"
+
+    def test_mpris_progress_is_integer_percent(self):
+        active = rb.arbiter({"running": False},
+                            {"spotify": _player(position=310_017_014,
+                                                length=357_353_000)})
+        assert active["progress"] == 86
+
+    def test_progress_none_without_usable_length(self):
+        for pos, length in ((5, None), (5, 0), (None, 9), (None, None)):
+            active = rb.arbiter({"running": False},
+                                {"spotify": _player(position=pos, length=length)})
+            assert active["progress"] is None, (pos, length)
+
+    def test_progress_is_clamped_to_0_100(self):
+        over = rb.arbiter({"running": False},
+                          {"spotify": _player(position=120, length=100)})
+        under = rb.arbiter({"running": False},
+                           {"spotify": _player(position=-3, length=100)})
+        assert (over["progress"], under["progress"]) == (100, 0)
+
+    def test_radio_has_no_progress(self):
+        assert rb.arbiter(_radio(), {})["progress"] is None
 
     def test_radio_title_uses_pick_title_fallback(self):
         active = rb.arbiter(_radio(icy=None), {})
@@ -1919,7 +1958,7 @@ class TestNowPlaying:
     def test_idle_tick_emits_idle_and_clears_worker(self):
         h = _NP()
         h.np.tick()
-        assert h.emitted[-1]["class"] == "idle"
+        assert h.emitted[-1]["class"] == ["idle"]
         assert h.worker_calls == [("clear",)]
         assert h.actives[-1]["source"] == "idle"
 
@@ -1943,7 +1982,21 @@ class TestNowPlaying:
         assert h.actives[-1] == {"source": "mpris", "player": "spotify",
                                  "playing": True, "artist": "Ar",
                                  "title": "Ti", "art_url": "https://a/i",
-                                 "station": None}
+                                 "station": None, "progress": None}
+
+    def test_position_updates_move_progress_class_without_retriggering_worker(self):
+        h = _NP()
+        state = {"status": "Playing", "artist": "Ar", "title": "Ti",
+                 "art_url": None, "position": 25_000_000,
+                 "length": 100_000_000}
+        h.store.update_player("spotify", state)
+        h.np.tick()
+        h.store.update_player("spotify", dict(state, position=50_000_000))
+        h.np.tick()
+        assert [e["class"] for e in h.emitted] == [["playing", "p25"],
+                                                    ["playing", "p50"]]
+        assert len(h.worker_calls) == 1   # progress is not a track change
+        assert len(h.actives) == 1        # nor an active-file rewrite
 
     def test_mpris_without_art_url_passes_empty_string(self):
         h = _NP()

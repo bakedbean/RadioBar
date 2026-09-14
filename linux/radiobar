@@ -552,7 +552,7 @@ class Renderer:
         if active["source"] == "idle":
             self.key = None
             return {"text": ICON_IDLE, "tooltip": "RadioBar: off",
-                    "class": "idle"}
+                    "class": ["idle"]}
         if active["source"] == "radio":
             body, subtitle = active["title"], active["station"]
         else:
@@ -591,9 +591,13 @@ class Renderer:
         text = (f"<span foreground='{self.icon_color}'>{icon}</span>{status} "
                 f"<span foreground='{self.text_color}'>"
                 f"{html.escape(shown, quote=False)}</span>")
+        classes = ["playing" if active["playing"] else "paused"]
+        if active["playing"] and active["progress"] is not None:
+            # Selects one of the pNN gradient rules in style-snippet.css,
+            # which draw the 1px progress line under the title.
+            classes.append(f"p{active['progress']:02d}")
         return {"text": text, "tooltip": f"{body}\n{subtitle}",
-                "class": "playing" if active["playing"] else "paused",
-                "markup": "pango"}
+                "class": classes, "markup": "pango"}
 
     def needs_tick(self) -> bool:
         return (self.playing and self.key is not None
@@ -602,7 +606,19 @@ class Renderer:
 
 IDLE_ACTIVE = {"source": "idle", "player": None, "playing": False,
                "artist": None, "title": None, "art_url": None,
-               "station": None}
+               "station": None, "progress": None}
+
+
+def progress_pct(position, length):
+    """MPRIS position/length (µs) -> integer percent 0..100, or None.
+
+    None whenever the player gives no usable length (browser tabs and live
+    streams report 0 or nothing), so the bar draws no line rather than a
+    meaningless one.
+    """
+    if position is None or not length or length <= 0:
+        return None
+    return max(0, min(100, position * 100 // length))
 
 
 def guard_action(prev_players: dict, players: dict,
@@ -638,7 +654,7 @@ def arbiter(radio: dict, players: dict) -> dict:
             "title": pick_title(radio.get("icy"), radio.get("media"),
                                 radio.get("station", "")),
             "art_url": None, "station": radio.get("station", ""),
-            "seq": radio.get("seq", 0),
+            "progress": None, "seq": radio.get("seq", 0),
         })
     for name, p in players.items():
         if radio.get("running") and name.startswith("mpv"):
@@ -650,6 +666,7 @@ def arbiter(radio: dict, players: dict) -> dict:
             "playing": p["status"] == "Playing",
             "artist": p.get("artist"), "title": p["title"],
             "art_url": p.get("art_url"), "station": None,
+            "progress": progress_pct(p.get("position"), p.get("length")),
             "seq": p.get("seq", 0),
         })
     if not candidates:
