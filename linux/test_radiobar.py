@@ -224,9 +224,26 @@ class TestRenderer:
 
     def test_progress_adds_zero_padded_percent_class_while_playing(self):
         out = self._renderer().render(_mpris_active(progress=7))
-        assert out["class"] == ["playing", "p07"]
+        assert out["class"] == ["playing", "progress", "p07"]
         out = self._renderer().render(_mpris_active(progress=100))
-        assert out["class"] == ["playing", "p100"]
+        assert out["class"] == ["playing", "progress", "p100"]
+
+    def test_every_emittable_progress_class_has_a_css_rule(self):
+        css = (pathlib.Path(__file__).parent / "style-snippet.css").read_text()
+        assert "#custom-radio.progress {" in css
+        for n in range(101):
+            assert f"#custom-radio.p{n:02d} " in css, n
+
+    def test_advance_false_holds_the_marquee_step(self):
+        r = self._renderer()
+        active = _mpris_active(title="x" * 40)
+        for _ in range(rb.PAUSE_TICKS + 2):
+            r.render(active)
+        assert r.offset == 2
+        r.render(active, advance=False)
+        assert r.offset == 2
+        r.render(active)
+        assert r.offset == 3
 
     def test_progress_class_omitted_while_paused(self):
         out = self._renderer().render(_mpris_active(playing=False, progress=42))
@@ -1588,6 +1605,16 @@ class TestParsePlayerctlLine:
             "firefox\tPlaying\t\tLive\t\t\t\n")
         assert state["position"] is None and state["length"] is None
 
+    def test_float_formatted_length_is_truncated_to_int(self):
+        # Some players type mpris:length as a double; playerctl prints it
+        # as a float string.
+        name, state = rb.parse_playerctl_line(
+            "vlc\tPlaying\t\tT\t\t1500000.0\t3000000.5\n")
+        assert state == dict(state, position=1_500_000, length=3_000_000)
+
+    def test_format_field_count_matches_parser(self):
+        assert rb.PLAYERCTL_FORMAT.count("\t") == 6
+
     def test_non_numeric_position_or_length_is_none(self):
         name, state = rb.parse_playerctl_line(
             "vlc\tPlaying\t\tT\t\tnan\t-\n")
@@ -1970,7 +1997,59 @@ class TestNowPlaying:
         h.np.tick()  # same identity → no second worker call
         assert h.worker_calls == [("track", "A - B", "FIP", None)]
         assert h.actives[-1]["source"] == "radio"
-        assert len(h.emitted) == 2  # render/emit happens every tick
+        assert len(h.emitted) == 1  # identical output is not re-emitted
+
+    def test_unchanged_output_is_not_re_emitted_but_changes_are(self):
+        # playerctl wakes the loop once a second; most of those wakes
+        # change nothing visible and must not feed waybar's dispatcher pipe.
+        h = _NP()
+        state = {"status": "Playing", "artist": "Ar", "title": "Ti",
+                 "art_url": None, "position": 10_000_000,
+                 "length": 1_000_000_000}
+        h.store.update_player("spotify", state)
+        h.np.tick()
+        h.store.update_player("spotify", dict(state, position=11_000_000))
+        h.np.tick()                       # still p01
+        assert len(h.emitted) == 1
+        h.store.update_player("spotify", dict(state, position=20_000_000))
+        h.np.tick()                       # p02
+        assert len(h.emitted) == 2
+
+    def test_run_steps_marquee_on_the_timer_not_on_every_wake(self):
+        h = _NP()
+        t = [0.0]
+        waits = [0.1, 0.15, 0.1, 0.15]    # early wake, timeout, early, timeout
+
+        class FakeEvent:
+            def wait(self, timeout=None):
+                assert timeout is not None and timeout > 0
+                t[0] += waits.pop(0)
+
+            def clear(self):
+                pass
+
+            def set(self):
+                pass
+
+        h.np.clock = lambda: t[0]
+        h.np.store.changed = FakeEvent()
+        h.store.update_player("spotify", {"status": "Playing", "artist": None,
+                                          "title": "x" * 40, "art_url": None})
+        offsets = []
+        orig_tick = h.np.tick
+
+        def tick(advance=True):
+            orig_tick(advance)
+            offsets.append(h.np.renderer.offset)
+
+        h.np.tick = tick
+        h.np.run(max_ticks=1)             # initial tick, hold begins
+        h.np.renderer.pause_ticks = 0     # skip the hold for brevity
+        offsets.clear()
+        h.np.run(max_ticks=5)
+        # run()'s own initial tick steps to 1; then wakes at 0.10 and 0.35
+        # are events (no step) while 0.25 and 0.50 are the 4 Hz deadlines.
+        assert offsets == [1, 1, 2, 2, 3]
 
     def test_mpris_track_passes_art_url_and_player_subtitle(self):
         h = _NP()
@@ -1993,8 +2072,8 @@ class TestNowPlaying:
         h.np.tick()
         h.store.update_player("spotify", dict(state, position=50_000_000))
         h.np.tick()
-        assert [e["class"] for e in h.emitted] == [["playing", "p25"],
-                                                    ["playing", "p50"]]
+        assert [e["class"] for e in h.emitted] == [
+            ["playing", "progress", "p25"], ["playing", "progress", "p50"]]
         assert len(h.worker_calls) == 1   # progress is not a track change
         assert len(h.actives) == 1        # nor an active-file rewrite
 
@@ -2083,11 +2162,12 @@ class TestNowPlaying:
 
         real_tick = h.np.tick
 
-        def tracking_tick():
+        def tracking_tick(advance=True):
             order.append(("tick",))
-            real_tick()
+            real_tick(advance)
 
         h.np.tick = tracking_tick
+        h.np.clock = lambda: 100.0  # frozen: the first timeout is exact
 
         # Idle store: renderer never needs a tick -> timeout=None each time.
         h.np.run(max_ticks=3)

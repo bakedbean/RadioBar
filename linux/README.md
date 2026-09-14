@@ -25,6 +25,12 @@ everything else pauses. One script + mpv, no daemon.
     cp linux/radiobar ~/.local/bin/radiobar
     chmod +x ~/.local/bin/radiobar
 
+**Upgrading an existing install** — the style snippet is additive: if you
+appended it before the track progress line existed, append the new
+`@define-color radiobar_progress` block and the `#custom-radio.progress` /
+`#custom-radio.pNN` rules from `linux/style-snippet.css` to your
+`style.css` again, then restart waybar.
+
 **Waybar** — merge `linux/waybar-snippet.jsonc` into
 `~/.config/waybar/config.jsonc` (add `"custom/radio"` to a modules array —
 the end of `"modules-left"` is best, see the snippet's note — and
@@ -101,7 +107,11 @@ its length is playing, a one-pixel line under the title grows from left to
 right and spans the module when the track ends. It reflects the player's
 own position, so seeking moves it within a second. Radio streams have no
 length and draw no line; neither do browser tabs or live streams that
-report none, and the line is hidden while paused. It takes the bar's
+report none, and the line is hidden while paused. One caveat: playerctl's
+once-a-second position tick goes to a single player (the first in its
+list that prints anything, normally the one that most recently started
+playing), so with two players playing at once the shown track's line may
+only move on seeks and track changes. It takes the bar's
 `@foreground` colour by default — change the `@define-color
 radiobar_progress` line in the style snippet to pick another.
 
@@ -190,11 +200,14 @@ thumbnail disappears.
 in the background to track every MPRIS player's state and metadata. The
 format it asks for includes `{{position}}` and `{{mpris:length}}`;
 because it contains `{{position}}`, playerctl re-emits the line once a
-second on its own timer, which is the only clock behind the progress
+second on its own timer (for one player at a time, see the caveat under
+**Track progress line**), which is the only clock behind the progress
 line (no polling, no extra processes). A line that changed only in
 position wakes the render loop but does not count as player activity for
-the arbiter's recency tie-break. The percent played becomes a `pNN` CSS
-class next to `playing`, and `style-snippet.css` carries one
+the arbiter's recency tie-break, does not step the marquee (scroll steps
+stay on their own 4 Hz deadline), and produces no output at all unless
+the rendered JSON actually changed. The percent played becomes a `pNN`
+CSS class next to `playing` and a `progress` marker, and `style-snippet.css` carries one
 hard-stop-gradient rule per percent to draw the line — GTK3 CSS has no
 arithmetic, so the width can't be computed from a single value. On
 each event it recomputes which source should own the bar: radio if it's

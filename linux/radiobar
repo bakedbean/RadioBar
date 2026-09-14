@@ -547,7 +547,13 @@ class Renderer:
         self.icon_color = COLORS[0]
         self.text_color = COLORS[0]
 
-    def render(self, active: dict) -> dict:
+    def render(self, active: dict, advance: bool = True) -> dict:
+        """Render `active`; step the marquee only when `advance` is set.
+
+        The loop wakes on every store change (playerctl's once-a-second
+        position line included), so the caller decides which wakes are
+        4 Hz scroll deadlines and which are mere redraws.
+        """
         self.playing = active["playing"]
         if active["source"] == "idle":
             self.key = None
@@ -572,7 +578,7 @@ class Renderer:
                 self.offset = 0
                 self.pause_ticks = PAUSE_TICKS
             shown = scroll_window(body, self.width, self.offset)
-            if active["playing"]:
+            if active["playing"] and advance:
                 if self.pause_ticks > 0:
                     self.pause_ticks -= 1
                 else:
@@ -593,9 +599,11 @@ class Renderer:
                 f"{html.escape(shown, quote=False)}</span>")
         classes = ["playing" if active["playing"] else "paused"]
         if active["playing"] and active["progress"] is not None:
-            # Selects one of the pNN gradient rules in style-snippet.css,
-            # which draw the 1px progress line under the title.
-            classes.append(f"p{active['progress']:02d}")
+            # `progress` scopes the shared background sizing rule in
+            # style-snippet.css to the moments a line is drawn (so a
+            # theme's own module background-image survives otherwise);
+            # pNN selects the gradient whose hard stop is the line's end.
+            classes += ["progress", f"p{active['progress']:02d}"]
         return {"text": text, "tooltip": f"{body}\n{subtitle}",
                 "class": classes, "markup": "pango"}
 
@@ -679,7 +687,11 @@ def arbiter(radio: dict, players: dict) -> dict:
 # {{position}} is load-bearing beyond the progress line itself: playerctl
 # re-emits the format once a second whenever it contains {{position}}
 # (verified with playerctl 2.4.1), so this is the module's only progress
-# clock — no polling thread, no per-tick process spawn.
+# clock — no polling thread, no per-tick process spawn. Caveat: that
+# timer ticks only the first player in playerctl's list that prints
+# anything (usually the one that most recently started playing). With two
+# Playing players the shown one may get no ticks, and its line then moves
+# only on seeks and track changes — by design, not a store bug.
 PLAYERCTL_FORMAT = ("{{playerName}}\t{{status}}\t{{artist}}\t{{title}}"
                     "\t{{mpris:artUrl}}\t{{position}}\t{{mpris:length}}")
 # Keys refreshed by playerctl's once-a-second position re-emit. A line
@@ -688,11 +700,19 @@ PROGRESS_KEYS = ("position", "length")
 
 
 def _micros(field: str):
-    """MPRIS position/length field (microseconds) -> int | None."""
-    try:
-        return int(field)
-    except ValueError:
-        return None
+    """MPRIS position/length field (microseconds) -> int | None.
+
+    Players that type mpris:length as a double come through playerctl as
+    a float string, hence the second attempt. A player with a length but
+    no Position property yields 0 from playerctl, i.e. a permanent p00,
+    which draws nothing — the safe outcome.
+    """
+    for conv in (int, lambda f: int(float(f))):
+        try:
+            return conv(field)
+        except ValueError:
+            pass
+    return None
 
 
 def parse_playerctl_line(line: str):
@@ -1007,17 +1027,20 @@ class NowPlaying:
     """Render loop: guard -> arbiter -> emit; side effects on track change."""
 
     def __init__(self, store, worker, renderer=None, emit_fn=emit,
-                 ipc=ipc_command, write_active_fn=write_active):
+                 ipc=ipc_command, write_active_fn=write_active,
+                 clock=time.monotonic):
         self.store = store
         self.worker = worker
         self.renderer = renderer or Renderer()
         self.emit = emit_fn
         self.ipc = ipc
         self.write_active = write_active_fn
+        self.clock = clock
         self.prev_players = {}
         self.last_identity = None
+        self.last_out = None
 
-    def tick(self):
+    def tick(self, advance: bool = True):
         radio, players = self.store.snapshot()
         radio_playing = bool(radio.get("running")) and not radio.get("paused")
         if guard_action(self.prev_players, players, radio_playing):
@@ -1026,7 +1049,13 @@ class NowPlaying:
             radio["paused"] = True  # reflect before mpv's event round-trips
         self.prev_players = players
         active = arbiter(radio, players)
-        self.emit(self.renderer.render(active))
+        out = self.renderer.render(active, advance)
+        # Most once-a-second position wakes change nothing visible (the
+        # percent moves every ~2 s on a typical track). Don't feed waybar's
+        # dispatcher pipe for them — see the TICK_SECONDS note.
+        if out != self.last_out:
+            self.last_out = out
+            self.emit(out)
         identity = (active["source"], active["player"], active["artist"],
                     active["title"], active["art_url"])
         if identity == self.last_identity:
@@ -1047,11 +1076,24 @@ class NowPlaying:
         None means forever, matching production (cmd_status) behavior."""
         self.tick()
         ticks = 1
+        deadline = None  # next 4 Hz marquee step, while one is needed
         while max_ticks is None or ticks < max_ticks:
-            timeout = TICK_SECONDS if self.renderer.needs_tick() else None
+            if self.renderer.needs_tick():
+                now = self.clock()
+                if deadline is None:
+                    deadline = now + TICK_SECONDS
+                timeout = max(0.0, deadline - now)
+            else:
+                deadline, timeout = None, None
             self.store.changed.wait(timeout=timeout)
             self.store.changed.clear()
-            self.tick()
+            # A store change can wake us mid-interval; that is a redraw,
+            # not a scroll step, or the marquee would stutter on every
+            # playerctl position line.
+            advance = deadline is not None and self.clock() >= deadline
+            if advance:
+                deadline = self.clock() + TICK_SECONDS
+            self.tick(advance)
             ticks += 1
 
 

@@ -33,19 +33,22 @@
 /* Track progress line: a 1px line under the title that grows left-to-right
    as the track plays and spans the module when it ends. `radiobar status`
    adds a class p00..p100 (integer percent played) whenever the shown
-   source is a playing MPRIS player that reports a track length; radio
-   streams, paused players, and players without a length get no line.
+   source is a playing MPRIS player that reports a track length (plus a
+   `progress` marker class); radio streams, paused players, and players
+   without a length get no line.
 
    One rule per percent because GTK3 CSS has no calc() or custom
    properties to size the line from a single value. The gradient's hard
    colour stop is the line's right edge. Change the colour here: */
 @define-color radiobar_progress @foreground;
 
-#custom-radio {
-  /* Inert until a pNN rule supplies the gradient. background-clip is left
-     at its border-box default so a theme's module background-color still
-     fills the padding; only the line is confined to the content box, so
-     it runs from the player icon to the end of the title window. */
+#custom-radio.progress {
+  /* Scoped to the `progress` class the module sets alongside pNN, so a
+     theme's own module background-image is only overridden while a line
+     is drawn. background-clip is left at its border-box default so a
+     theme's background-color still fills the padding; only the line is
+     confined to the content box, so it runs from the player icon to the
+     end of the title window. */
   background-size: 100% 1px;
   background-repeat: no-repeat;
   background-position: left bottom;
