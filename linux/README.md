@@ -96,6 +96,15 @@ sources, the leading icon identifies the player
 `󰏤` status icon appended only when paused. A dim `󰐹` shows when
 everything's off.
 
+**Track progress line**: while a Spotify (or any MPRIS) track that reports
+its length is playing, a one-pixel line under the title grows from left to
+right and spans the module when the track ends. It reflects the player's
+own position, so seeking moves it within a second. Radio streams have no
+length and draw no line; neither do browser tabs or live streams that
+report none, and the line is hidden while paused. It takes the bar's
+`@foreground` colour by default — change the `@define-color
+radiobar_progress` line in the style snippet to pick another.
+
 **Narrowing the title (small displays)**: the marquee window is 30
 characters by default, which occupies about 210px at a 12px monospace font
 — enough to crowd `modules-center` on a narrow bar. Set
@@ -178,7 +187,16 @@ set). `radiobar stop` clears the art file and re-signals waybar so the
 thumbnail disappears.
 
 `radiobar status` also runs `playerctl --all-players --follow metadata`
-in the background to track every MPRIS player's state and metadata. On
+in the background to track every MPRIS player's state and metadata. The
+format it asks for includes `{{position}}` and `{{mpris:length}}`;
+because it contains `{{position}}`, playerctl re-emits the line once a
+second on its own timer, which is the only clock behind the progress
+line (no polling, no extra processes). A line that changed only in
+position wakes the render loop but does not count as player activity for
+the arbiter's recency tie-break. The percent played becomes a `pNN` CSS
+class next to `playing`, and `style-snippet.css` carries one
+hard-stop-gradient rule per percent to draw the line — GTK3 CSS has no
+arithmetic, so the width can't be computed from a single value. On
 each event it recomputes which source should own the bar: radio if it's
 playing, else whichever MPRIS player is playing; if none are playing, the
 one that's paused and changed most recently; radio itself is the
