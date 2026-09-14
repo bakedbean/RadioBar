@@ -659,8 +659,23 @@ def arbiter(radio: dict, players: dict) -> dict:
     return best
 
 
+# {{position}} is load-bearing beyond the progress line itself: playerctl
+# re-emits the format once a second whenever it contains {{position}}
+# (verified with playerctl 2.4.1), so this is the module's only progress
+# clock — no polling thread, no per-tick process spawn.
 PLAYERCTL_FORMAT = ("{{playerName}}\t{{status}}\t{{artist}}\t{{title}}"
-                    "\t{{mpris:artUrl}}")
+                    "\t{{mpris:artUrl}}\t{{position}}\t{{mpris:length}}")
+# Keys refreshed by playerctl's once-a-second position re-emit. A line
+# that differs only in these is progress, not player activity.
+PROGRESS_KEYS = ("position", "length")
+
+
+def _micros(field: str):
+    """MPRIS position/length field (microseconds) -> int | None."""
+    try:
+        return int(field)
+    except ValueError:
+        return None
 
 
 def parse_playerctl_line(line: str):
@@ -673,16 +688,21 @@ def parse_playerctl_line(line: str):
     if not line.strip():
         return None
     parts = line.split("\t")
-    if len(parts) != 5 or not parts[0]:
+    if len(parts) != 7 or not parts[0]:
         return None
-    name, status, artist, title, art_url = parts
+    name, status, artist, title, art_url, position, length = parts
     if status not in ("Playing", "Paused"):
         return (name, None)
     # Decode HTML entities some players leak into metadata; art_url stays
     # raw — unescaping could corrupt signed query strings.
     return (name, {"status": status, "artist": html.unescape(artist) or None,
                    "title": html.unescape(title) or None,
-                   "art_url": art_url or None})
+                   "art_url": art_url or None,
+                   "position": _micros(position), "length": _micros(length)})
+
+
+def _sans(d: dict, keys) -> dict:
+    return {k: v for k, v in d.items() if k not in keys}
 
 
 class StateStore:
@@ -716,6 +736,18 @@ class StateStore:
             if state is None:
                 self._players.pop(name, None)
             else:
+                prev = self._players.get(name)
+                if prev is not None:
+                    if _sans(prev, ("seq",)) == state:
+                        return  # identical re-emit: nothing to redraw
+                    if _sans(prev, ("seq",) + PROGRESS_KEYS) == \
+                            _sans(state, PROGRESS_KEYS):
+                        # Progress-only: redraw the bar, but keep seq so the
+                        # arbiter's recency tie-break doesn't see a paused
+                        # player "changing" every second.
+                        self._players[name] = dict(state, seq=prev["seq"])
+                        self.changed.set()
+                        return
                 self._seq += 1
                 s = dict(state)
                 s["seq"] = self._seq

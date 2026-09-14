@@ -734,9 +734,9 @@ class TestMprisSource:
                 # firefox is fed Playing (and would otherwise survive);
                 # spotify is fed Playing then Stopped and must be dropped.
                 return _FakeProc(
-                    ["firefox\tPlaying\tAr\tTi\turl\n",
-                     "spotify\tPlaying\tA2\tT2\t\n",
-                     "spotify\tStopped\t\t\t\n"],
+                    ["firefox\tPlaying\tAr\tTi\turl\t\t\n",
+                     "spotify\tPlaying\tA2\tT2\t\t1\t2\n",
+                     "spotify\tStopped\t\t\t\t\t\n"],
                     on_wait=lambda: order.append("wait"))
             raise FileNotFoundError("playerctl")
 
@@ -1558,18 +1558,33 @@ class TestCmdMenuNotifyRobustness:
 
 class TestParsePlayerctlLine:
     def test_playing_line(self):
-        line = "spotify\tPlaying\tAir\tLa Femme d'Argent\thttps://i.scdn.co/image/x\n"
+        line = ("spotify\tPlaying\tAir\tLa Femme d'Argent"
+                "\thttps://i.scdn.co/image/x\t310017014\t357353000\n")
         name, state = rb.parse_playerctl_line(line)
         assert name == "spotify"
         assert state == {"status": "Playing", "artist": "Air",
                          "title": "La Femme d'Argent",
-                         "art_url": "https://i.scdn.co/image/x"}
+                         "art_url": "https://i.scdn.co/image/x",
+                         "position": 310017014, "length": 357353000}
+
+    def test_position_and_length_are_none_when_unreported(self):
+        # Browser tabs / live streams leave position and length blank.
+        name, state = rb.parse_playerctl_line(
+            "firefox\tPlaying\t\tLive\t\t\t\n")
+        assert state["position"] is None and state["length"] is None
+
+    def test_non_numeric_position_or_length_is_none(self):
+        name, state = rb.parse_playerctl_line(
+            "vlc\tPlaying\t\tT\t\tnan\t-\n")
+        assert state["position"] is None and state["length"] is None
 
     def test_empty_fields_become_none(self):
-        name, state = rb.parse_playerctl_line("firefox\tPaused\t\tSome Video\t\n")
+        name, state = rb.parse_playerctl_line(
+            "firefox\tPaused\t\tSome Video\t\t\t\n")
         assert name == "firefox"
         assert state == {"status": "Paused", "artist": None,
-                         "title": "Some Video", "art_url": None}
+                         "title": "Some Video", "art_url": None,
+                         "position": None, "length": None}
 
     def test_blank_line_is_ignored(self):
         assert rb.parse_playerctl_line("\n") is None
@@ -1578,17 +1593,19 @@ class TestParsePlayerctlLine:
     def test_wrong_field_count_is_ignored(self):
         assert rb.parse_playerctl_line("garbage line\n") is None
         assert rb.parse_playerctl_line("a\tb\tc\n") is None
+        # The pre-progress five-field format is no longer accepted.
+        assert rb.parse_playerctl_line("spotify\tPlaying\tA\tT\t\n") is None
 
     def test_stopped_or_cleared_status_drops_player(self):
-        assert rb.parse_playerctl_line("spotify\tStopped\t\t\t\n") == ("spotify", None)
-        assert rb.parse_playerctl_line("spotify\t\t\t\t\n") == ("spotify", None)
+        assert rb.parse_playerctl_line("spotify\tStopped\t\t\t\t\t\n") == ("spotify", None)
+        assert rb.parse_playerctl_line("spotify\t\t\t\t\t\t\n") == ("spotify", None)
 
     def test_empty_player_name_is_ignored(self):
-        assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
+        assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\t\t\n") is None
 
     def test_html_entities_in_artist_and_title_decoded(self):
         line = ("firefox\tPlaying\tSimon &amp; Garfunkel"
-                "\tDon&apos;t Stop\thttps://x/a?b=1&amp;c=2\n")
+                "\tDon&apos;t Stop\thttps://x/a?b=1&amp;c=2\t\t\n")
         name, state = rb.parse_playerctl_line(line)
         assert name == "firefox"
         assert state["artist"] == "Simon & Garfunkel"
@@ -1719,6 +1736,43 @@ class TestStateStore:
                                         "title": "V", "art_url": None})
         _, players = store.snapshot()
         assert players["firefox"]["seq"] > players["spotify"]["seq"]
+
+    def test_position_only_update_keeps_seq_but_wakes_render_loop(self):
+        # playerctl re-emits once a second while `{{position}}` is in its
+        # format. That line must redraw the progress line (changed set)
+        # without counting as player activity for the arbiter's recency
+        # tie-break (seq unchanged).
+        store = rb.StateStore()
+        base = {"status": "Playing", "artist": None, "title": "T",
+                "art_url": None, "position": 1_000_000, "length": 9_000_000}
+        store.update_player("spotify", base)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.changed.clear()
+        store.update_player("spotify", dict(base, position=2_000_000))
+        _, players = store.snapshot()
+        assert players["spotify"]["position"] == 2_000_000
+        assert players["spotify"]["seq"] == seq1
+        assert store.changed.is_set()
+
+    def test_identical_player_update_is_a_noop(self):
+        store = rb.StateStore()
+        state = {"status": "Paused", "artist": None, "title": "T",
+                 "art_url": None, "position": 5, "length": 9}
+        store.update_player("spotify", state)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.changed.clear()
+        store.update_player("spotify", dict(state))
+        assert store.snapshot()[1]["spotify"]["seq"] == seq1
+        assert not store.changed.is_set()
+
+    def test_status_change_with_new_position_still_bumps_seq(self):
+        store = rb.StateStore()
+        state = {"status": "Paused", "artist": None, "title": "T",
+                 "art_url": None, "position": 5, "length": 9}
+        store.update_player("spotify", state)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.update_player("spotify", dict(state, status="Playing", position=6))
+        assert store.snapshot()[1]["spotify"]["seq"] > seq1
 
     def test_snapshot_is_a_copy(self):
         store = rb.StateStore()
