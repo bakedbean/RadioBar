@@ -27,10 +27,11 @@ def _load():
 rb = _load()
 
 
-def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify"):
+def _mpris_active(playing=True, artist="Ar", title="Ti", player="spotify",
+                  progress=None):
     return {"source": "mpris", "player": player, "playing": playing,
             "artist": artist, "title": title, "art_url": None,
-            "station": None}
+            "station": None, "progress": progress}
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +48,7 @@ def _default_scroll_width(monkeypatch):
 def _radio_active(playing=True, title="A - B", station="FIP"):
     return {"source": "radio", "player": None, "playing": playing,
             "artist": None, "title": title, "art_url": None,
-            "station": station}
+            "station": station, "progress": None}
 
 
 class TestScrollWindow:
@@ -135,11 +136,11 @@ class TestRenderer:
 
     def test_idle(self):
         out = self._renderer().render(dict(rb.IDLE_ACTIVE))
-        assert out["class"] == "idle" and out["text"] == rb.ICON_IDLE
+        assert out["class"] == ["idle"] and out["text"] == rb.ICON_IDLE
 
     def test_mpris_playing_has_icons_colors_and_tooltip(self):
         out = self._renderer().render(_mpris_active())
-        assert out["class"] == "playing" and out["markup"] == "pango"
+        assert out["class"] == ["playing"] and out["markup"] == "pango"
         assert rb.PLAYER_ICONS["spotify"] in out["text"]
         assert rb.COLORS[0] in out["text"]
         assert "Ar - Ti" in out["text"]
@@ -147,16 +148,16 @@ class TestRenderer:
 
     def test_mpris_paused_appends_status_icon(self):
         out = self._renderer().render(_mpris_active(playing=False))
-        assert out["class"] == "paused"
+        assert out["class"] == ["paused"]
         assert rb.ICON_MPRIS_PAUSED in out["text"]
 
     def test_radio_uses_play_pause_icon_only(self):
         r = self._renderer()
         out = r.render(_radio_active(playing=True))
-        assert rb.ICON_PLAY in out["text"] and out["class"] == "playing"
+        assert rb.ICON_PLAY in out["text"] and out["class"] == ["playing"]
         assert rb.ICON_MPRIS_PAUSED not in out["text"]
         out = r.render(_radio_active(playing=False))
-        assert rb.ICON_PAUSE in out["text"] and out["class"] == "paused"
+        assert rb.ICON_PAUSE in out["text"] and out["class"] == ["paused"]
         assert out["tooltip"] == "A - B\nFIP"
 
     def test_short_title_no_tick_needed(self):
@@ -169,9 +170,11 @@ class TestRenderer:
         long = _mpris_active(artist=None, title="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef")
         r.render(long)
         assert r.needs_tick() is True
-        # first PAUSE_TICKS renders hold the window at offset 0
+        # the first PAUSE_TICKS renders (1 s at 4 Hz) hold the window at
+        # offset 0; the step happens before `shown` is built, so the
+        # (PAUSE_TICKS + 1)th render is the first to move
         first = r.render(long)["text"]
-        for _ in range(rb.PAUSE_TICKS - 1):
+        for _ in range(rb.PAUSE_TICKS - 2):
             held = r.render(long)["text"]
         assert held == first
         moved = r.render(long)["text"]
@@ -198,9 +201,10 @@ class TestRenderer:
             r.render(playing)
         r.render(_mpris_active(artist=None, title=title, playing=False))
         first = r.render(playing)["text"]
-        # offset advances after `shown` is computed, so the hold spans
-        # PAUSE_TICKS further renders before the window visibly moves
-        for _ in range(rb.PAUSE_TICKS):
+        # the step happens before `shown` is built, so the hold spans
+        # PAUSE_TICKS renders in total (1 s at 4 Hz) before the window
+        # visibly moves
+        for _ in range(rb.PAUSE_TICKS - 1):
             held = r.render(playing)["text"]
         assert held == first
         assert r.render(playing)["text"] != first
@@ -220,6 +224,69 @@ class TestRenderer:
         b = r.render(_mpris_active(title="y" * 40))  # new track
         # colors advanced: 2 picks per track with our fake chooser
         assert rb.COLORS[0] in a["text"] and rb.COLORS[2] in b["text"]
+
+    def test_progress_adds_zero_padded_percent_class_while_playing(self):
+        out = self._renderer().render(_mpris_active(progress=7))
+        assert out["class"] == ["playing", "progress", "cf5c402", "p07"]
+        out = self._renderer().render(_mpris_active(progress=100))
+        assert out["class"] == ["playing", "progress", "cf5c402", "p100"]
+
+    def test_progress_colour_class_follows_the_title_colour(self):
+        # The line is drawn with currentColor, so the class carries the
+        # title's (randomly chosen) colour, lowercased, without the '#'.
+        r = rb.Renderer(choose=lambda colors: "#85C1DC")
+        out = r.render(_mpris_active(progress=50))
+        assert "c85c1dc" in out["class"]
+        assert "<span foreground='#85C1DC'>" in out["text"]
+
+    def test_every_emittable_progress_class_has_a_css_rule(self):
+        css = (pathlib.Path(__file__).parent / "style-snippet.css").read_text()
+        assert "#custom-radio.progress {" in css
+        assert "background-position: left calc(100% - 1px);" in css
+        for n in range(101):
+            assert (f"#custom-radio.p{n:02d} {{ background-image: "
+                    f"linear-gradient(to right, currentColor {n}%, "
+                    f"transparent {n}%); }}") in css, n
+        for colour in rb.COLORS:
+            hexpart = colour.lstrip("#").lower()
+            assert (f"#custom-radio.c{hexpart} {{ color: #{hexpart}; }}"
+                    in css), colour
+        assert "radiobar_progress" not in css   # superseded by currentColor
+
+    def test_advance_false_holds_the_marquee_step(self):
+        r = self._renderer()
+        active = _mpris_active(title="x" * 40)
+        for _ in range(rb.PAUSE_TICKS + 2):
+            r.render(active)
+        assert r.offset == 2
+        r.render(active, advance=False)
+        assert r.offset == 2
+        r.render(active)
+        assert r.offset == 3
+
+    def test_progress_class_omitted_while_paused(self):
+        out = self._renderer().render(_mpris_active(playing=False, progress=42))
+        assert out["class"] == ["paused"]
+
+    def test_progress_class_does_not_leak_into_text_or_tooltip(self):
+        out = self._renderer().render(_mpris_active(progress=42))
+        assert "p42" not in out["text"] and "42" not in out["tooltip"]
+
+    def test_non_stepping_render_repeats_the_last_frame_exactly(self):
+        # A position wake (advance=False) between two 4 Hz deadlines must
+        # show the same frame as the deadline before it, not the next one
+        # early — otherwise the marquee still jitters visibly even though
+        # the step count is right.
+        r = self._renderer()
+        active = _mpris_active(artist=None,
+                               title="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef")
+        for _ in range(rb.PAUSE_TICKS + 1):
+            r.render(active)                       # get past the head hold
+        a = r.render(active)["text"]
+        b = r.render(active, advance=False)["text"]
+        c = r.render(active)["text"]
+        d = r.render(active, advance=False)["text"]
+        assert b == a and d == c and c != a
 
     def test_pango_special_chars_escaped(self):
         out = self._renderer().render(
@@ -734,9 +801,9 @@ class TestMprisSource:
                 # firefox is fed Playing (and would otherwise survive);
                 # spotify is fed Playing then Stopped and must be dropped.
                 return _FakeProc(
-                    ["firefox\tPlaying\tAr\tTi\turl\n",
-                     "spotify\tPlaying\tA2\tT2\t\n",
-                     "spotify\tStopped\t\t\t\n"],
+                    ["firefox\tPlaying\tAr\tTi\turl\t\t\n",
+                     "spotify\tPlaying\tA2\tT2\t\t1\t2\n",
+                     "spotify\tStopped\t\t\t\t\t\n"],
                     on_wait=lambda: order.append("wait"))
             raise FileNotFoundError("playerctl")
 
@@ -755,6 +822,25 @@ class TestMprisSource:
         _, players = store.snapshot()
         assert players == {}
         assert "playerctl" in capsys.readouterr().err
+
+    def test_reader_continues_past_a_malformed_numeric_line(self):
+        store = rb.StateStore()
+        seen = []
+        real = store.update_player
+        store.update_player = lambda name, state: (seen.append((name, state)),
+                                                   real(name, state))
+        spawns = []
+
+        def popen(cmd, **kwargs):
+            spawns.append(cmd)
+            if len(spawns) == 1:
+                return _FakeProc(["spotify\tPlaying\tA\tT1\t\tinf\t1e999\n",
+                                  "spotify\tPlaying\tA\tT2\t\t5\t9\n"])
+            raise FileNotFoundError("playerctl")
+
+        rb.MprisSource(store, popen=popen, sleep=lambda s: None).run()
+        assert [t for _, st in seen for t in [st["title"]]] == ["T1", "T2"]
+        assert seen[0][1]["length"] is None and seen[1][1]["length"] == 9
 
     def test_oserror_spawn_retries(self):
         store = rb.StateStore()
@@ -1558,18 +1644,51 @@ class TestCmdMenuNotifyRobustness:
 
 class TestParsePlayerctlLine:
     def test_playing_line(self):
-        line = "spotify\tPlaying\tAir\tLa Femme d'Argent\thttps://i.scdn.co/image/x\n"
+        line = ("spotify\tPlaying\tAir\tLa Femme d'Argent"
+                "\thttps://i.scdn.co/image/x\t310017014\t357353000\n")
         name, state = rb.parse_playerctl_line(line)
         assert name == "spotify"
         assert state == {"status": "Playing", "artist": "Air",
                          "title": "La Femme d'Argent",
-                         "art_url": "https://i.scdn.co/image/x"}
+                         "art_url": "https://i.scdn.co/image/x",
+                         "position": 310017014, "length": 357353000}
+
+    def test_position_and_length_are_none_when_unreported(self):
+        # Browser tabs / live streams leave position and length blank.
+        _, state = rb.parse_playerctl_line(
+            "firefox\tPlaying\t\tLive\t\t\t\n")
+        assert state["position"] is None and state["length"] is None
+
+    def test_float_formatted_length_is_truncated_to_int(self):
+        # Some players type mpris:length as a double; playerctl prints it
+        # as a float string.
+        _, state = rb.parse_playerctl_line(
+            "vlc\tPlaying\t\tT\t\t1500000.0\t3000000.5\n")
+        assert state == dict(state, position=1_500_000, length=3_000_000)
+
+    def test_non_finite_numbers_are_none(self):
+        # int(float("inf")) raises OverflowError, not ValueError; a player
+        # emitting one of these must not take the reader thread down.
+        for bad in ("inf", "-inf", "1e999", "-1e999"):
+            _, state = rb.parse_playerctl_line(
+                f"vlc\tPlaying\t\tT\t\t{bad}\t{bad}\n")
+            assert state["position"] is None and state["length"] is None, bad
+
+    def test_format_field_count_matches_parser(self):
+        assert rb.PLAYERCTL_FORMAT.count("\t") == 6
+
+    def test_non_numeric_position_or_length_is_none(self):
+        _, state = rb.parse_playerctl_line(
+            "vlc\tPlaying\t\tT\t\tnan\t-\n")
+        assert state["position"] is None and state["length"] is None
 
     def test_empty_fields_become_none(self):
-        name, state = rb.parse_playerctl_line("firefox\tPaused\t\tSome Video\t\n")
+        name, state = rb.parse_playerctl_line(
+            "firefox\tPaused\t\tSome Video\t\t\t\n")
         assert name == "firefox"
         assert state == {"status": "Paused", "artist": None,
-                         "title": "Some Video", "art_url": None}
+                         "title": "Some Video", "art_url": None,
+                         "position": None, "length": None}
 
     def test_blank_line_is_ignored(self):
         assert rb.parse_playerctl_line("\n") is None
@@ -1578,17 +1697,19 @@ class TestParsePlayerctlLine:
     def test_wrong_field_count_is_ignored(self):
         assert rb.parse_playerctl_line("garbage line\n") is None
         assert rb.parse_playerctl_line("a\tb\tc\n") is None
+        # The pre-progress five-field format is no longer accepted.
+        assert rb.parse_playerctl_line("spotify\tPlaying\tA\tT\t\n") is None
 
     def test_stopped_or_cleared_status_drops_player(self):
-        assert rb.parse_playerctl_line("spotify\tStopped\t\t\t\n") == ("spotify", None)
-        assert rb.parse_playerctl_line("spotify\t\t\t\t\n") == ("spotify", None)
+        assert rb.parse_playerctl_line("spotify\tStopped\t\t\t\t\t\n") == ("spotify", None)
+        assert rb.parse_playerctl_line("spotify\t\t\t\t\t\t\n") == ("spotify", None)
 
     def test_empty_player_name_is_ignored(self):
-        assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\n") is None
+        assert rb.parse_playerctl_line("\tPlaying\tA\tT\t\t\t\n") is None
 
     def test_html_entities_in_artist_and_title_decoded(self):
         line = ("firefox\tPlaying\tSimon &amp; Garfunkel"
-                "\tDon&apos;t Stop\thttps://x/a?b=1&amp;c=2\n")
+                "\tDon&apos;t Stop\thttps://x/a?b=1&amp;c=2\t\t\n")
         name, state = rb.parse_playerctl_line(line)
         assert name == "firefox"
         assert state["artist"] == "Simon & Garfunkel"
@@ -1602,9 +1723,11 @@ def _radio(playing=True, icy="A - B", station="FIP", seq=1):
             "media": None, "station": station, "seq": seq}
 
 
-def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1):
+def _player(status="Playing", artist="Ar", title="Ti", art_url=None, seq=1,
+            position=None, length=None):
     return {"status": status, "artist": artist, "title": title,
-            "art_url": art_url, "seq": seq}
+            "art_url": art_url, "seq": seq, "position": position,
+            "length": length}
 
 
 class TestGuardAction:
@@ -1678,6 +1801,28 @@ class TestArbiter:
                              "firefox": _player("Paused", title="V", seq=5)})
         assert active["player"] == "firefox"
 
+    def test_mpris_progress_is_integer_percent(self):
+        active = rb.arbiter({"running": False},
+                            {"spotify": _player(position=310_017_014,
+                                                length=357_353_000)})
+        assert active["progress"] == 86
+
+    def test_progress_none_without_usable_length(self):
+        for pos, length in ((5, None), (5, 0), (None, 9), (None, None)):
+            active = rb.arbiter({"running": False},
+                                {"spotify": _player(position=pos, length=length)})
+            assert active["progress"] is None, (pos, length)
+
+    def test_progress_is_clamped_to_0_100(self):
+        over = rb.arbiter({"running": False},
+                          {"spotify": _player(position=120, length=100)})
+        under = rb.arbiter({"running": False},
+                           {"spotify": _player(position=-3, length=100)})
+        assert (over["progress"], under["progress"]) == (100, 0)
+
+    def test_radio_has_no_progress(self):
+        assert rb.arbiter(_radio(), {})["progress"] is None
+
     def test_radio_title_uses_pick_title_fallback(self):
         active = rb.arbiter(_radio(icy=None), {})
         assert active["title"] == "FIP"
@@ -1719,6 +1864,56 @@ class TestStateStore:
                                         "title": "V", "art_url": None})
         _, players = store.snapshot()
         assert players["firefox"]["seq"] > players["spotify"]["seq"]
+
+    def test_position_only_update_keeps_seq_but_wakes_render_loop(self):
+        # playerctl re-emits once a second while `{{position}}` is in its
+        # format. That line must redraw the progress line (changed set)
+        # without counting as player activity for the arbiter's recency
+        # tie-break (seq unchanged).
+        store = rb.StateStore()
+        base = {"status": "Playing", "artist": None, "title": "T",
+                "art_url": None, "position": 1_000_000, "length": 9_000_000}
+        store.update_player("spotify", base)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.changed.clear()
+        store.update_player("spotify", dict(base, position=2_000_000))
+        _, players = store.snapshot()
+        assert players["spotify"]["position"] == 2_000_000
+        assert players["spotify"]["seq"] == seq1
+        assert store.changed.is_set()
+
+    def test_identical_player_update_is_a_noop(self):
+        store = rb.StateStore()
+        state = {"status": "Paused", "artist": None, "title": "T",
+                 "art_url": None, "position": 5, "length": 9}
+        store.update_player("spotify", state)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.changed.clear()
+        store.update_player("spotify", dict(state))
+        assert store.snapshot()[1]["spotify"]["seq"] == seq1
+        assert not store.changed.is_set()
+
+    def test_length_only_change_keeps_seq(self):
+        # A player swapping its reported length (e.g. Spotify settling on
+        # the real duration) is progress data, not activity.
+        store = rb.StateStore()
+        state = {"status": "Playing", "artist": None, "title": "T",
+                 "art_url": None, "position": 5, "length": 9}
+        store.update_player("spotify", state)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.changed.clear()
+        store.update_player("spotify", dict(state, length=10))
+        assert store.snapshot()[1]["spotify"]["seq"] == seq1
+        assert store.changed.is_set()
+
+    def test_status_change_with_new_position_still_bumps_seq(self):
+        store = rb.StateStore()
+        state = {"status": "Paused", "artist": None, "title": "T",
+                 "art_url": None, "position": 5, "length": 9}
+        store.update_player("spotify", state)
+        seq1 = store.snapshot()[1]["spotify"]["seq"]
+        store.update_player("spotify", dict(state, status="Playing", position=6))
+        assert store.snapshot()[1]["spotify"]["seq"] > seq1
 
     def test_snapshot_is_a_copy(self):
         store = rb.StateStore()
@@ -1865,7 +2060,7 @@ class TestNowPlaying:
     def test_idle_tick_emits_idle_and_clears_worker(self):
         h = _NP()
         h.np.tick()
-        assert h.emitted[-1]["class"] == "idle"
+        assert h.emitted[-1]["class"] == ["idle"]
         assert h.worker_calls == [("clear",)]
         assert h.actives[-1]["source"] == "idle"
 
@@ -1877,7 +2072,59 @@ class TestNowPlaying:
         h.np.tick()  # same identity → no second worker call
         assert h.worker_calls == [("track", "A - B", "FIP", None)]
         assert h.actives[-1]["source"] == "radio"
-        assert len(h.emitted) == 2  # render/emit happens every tick
+        assert len(h.emitted) == 1  # identical output is not re-emitted
+
+    def test_unchanged_output_is_not_re_emitted_but_changes_are(self):
+        # playerctl wakes the loop once a second; most of those wakes
+        # change nothing visible and must not feed waybar's dispatcher pipe.
+        h = _NP()
+        state = {"status": "Playing", "artist": "Ar", "title": "Ti",
+                 "art_url": None, "position": 10_000_000,
+                 "length": 1_000_000_000}
+        h.store.update_player("spotify", state)
+        h.np.tick()
+        h.store.update_player("spotify", dict(state, position=11_000_000))
+        h.np.tick()                       # still p01
+        assert len(h.emitted) == 1
+        h.store.update_player("spotify", dict(state, position=20_000_000))
+        h.np.tick()                       # p02
+        assert len(h.emitted) == 2
+
+    def test_run_steps_marquee_on_the_timer_not_on_every_wake(self):
+        h = _NP()
+        t = [0.0]
+        waits = [0.1, 0.15, 0.1, 0.15]    # early wake, timeout, early, timeout
+
+        class FakeEvent:
+            def wait(self, timeout=None):
+                assert timeout is not None and timeout > 0
+                t[0] += waits.pop(0)
+
+            def clear(self):
+                pass
+
+            def set(self):
+                pass
+
+        h.np.clock = lambda: t[0]
+        h.np.store.changed = FakeEvent()
+        h.store.update_player("spotify", {"status": "Playing", "artist": None,
+                                          "title": "x" * 40, "art_url": None})
+        offsets = []
+        orig_tick = h.np.tick
+
+        def tick(advance=True):
+            orig_tick(advance)
+            offsets.append(h.np.renderer.offset)
+
+        h.np.tick = tick
+        h.np.run(max_ticks=1)             # initial tick, hold begins
+        h.np.renderer.pause_ticks = 0     # skip the hold for brevity
+        offsets.clear()
+        h.np.run(max_ticks=5)
+        # run()'s own initial tick steps to 1; then wakes at 0.10 and 0.35
+        # are events (no step) while 0.25 and 0.50 are the 4 Hz deadlines.
+        assert offsets == [1, 1, 2, 2, 3]
 
     def test_mpris_track_passes_art_url_and_player_subtitle(self):
         h = _NP()
@@ -1889,7 +2136,22 @@ class TestNowPlaying:
         assert h.actives[-1] == {"source": "mpris", "player": "spotify",
                                  "playing": True, "artist": "Ar",
                                  "title": "Ti", "art_url": "https://a/i",
-                                 "station": None}
+                                 "station": None, "progress": None}
+
+    def test_position_updates_move_progress_class_without_retriggering_worker(self):
+        h = _NP()
+        state = {"status": "Playing", "artist": "Ar", "title": "Ti",
+                 "art_url": None, "position": 25_000_000,
+                 "length": 100_000_000}
+        h.store.update_player("spotify", state)
+        h.np.tick()
+        h.store.update_player("spotify", dict(state, position=50_000_000))
+        h.np.tick()
+        assert [e["class"] for e in h.emitted] == [
+            ["playing", "progress", "cf5c402", "p25"],
+            ["playing", "progress", "cf5c402", "p50"]]
+        assert len(h.worker_calls) == 1   # progress is not a track change
+        assert len(h.actives) == 1        # nor an active-file rewrite
 
     def test_mpris_without_art_url_passes_empty_string(self):
         h = _NP()
@@ -1976,11 +2238,12 @@ class TestNowPlaying:
 
         real_tick = h.np.tick
 
-        def tracking_tick():
+        def tracking_tick(advance=True):
             order.append(("tick",))
-            real_tick()
+            real_tick(advance)
 
         h.np.tick = tracking_tick
+        h.np.clock = lambda: 100.0  # frozen: the first timeout is exact
 
         # Idle store: renderer never needs a tick -> timeout=None each time.
         h.np.run(max_ticks=3)

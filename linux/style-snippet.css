@@ -29,3 +29,152 @@
 #custom-radio.idle {
   opacity: 0.5;
 }
+
+/* Track progress line: a 1px line under the title that grows left-to-right
+   as the track plays and spans the module when it ends. `radiobar status`
+   adds three classes whenever the shown source is a playing MPRIS player
+   that reports a track length: `progress` (marker), `c<hex>` (the title's
+   colour for this track), and p00..p100 (integer percent played). Radio
+   streams, paused players, and players without a length get no line.
+
+   The pNN rules paint the line with `currentColor`, and the c<hex> rules
+   set that colour to the title's — so the line follows the title's
+   rotating palette with 20 + 101 rules instead of 20 × 101. One rule per
+   percent because GTK3 CSS has no custom properties to size the line from
+   a single value; the gradient's hard colour stop is the line's right
+   edge. The c<hex> list mirrors COLORS in the radiobar script. */
+
+#custom-radio.progress {
+  /* Scoped to the `progress` class the module sets alongside pNN, so a
+     theme's own module background-image is only overridden while a line
+     is drawn. background-clip is left at its border-box default so a
+     theme's background-color still fills the padding; only the line is
+     confined to the content box, so it runs from the player icon to the
+     end of the title window. The calc() lifts it one pixel off the bar's
+     bottom edge (verified to parse on GTK 3.24). */
+  background-size: 100% 1px;
+  background-repeat: no-repeat;
+  background-position: left calc(100% - 1px);
+  background-origin: content-box;
+}
+#custom-radio.cf5c402 { color: #f5c402; }
+#custom-radio.cf4b8e4 { color: #f4b8e4; }
+#custom-radio.c99d1db { color: #99d1db; }
+#custom-radio.ca6d189 { color: #a6d189; }
+#custom-radio.c8caaee { color: #8caaee; }
+#custom-radio.ce5c890 { color: #e5c890; }
+#custom-radio.cea999c { color: #ea999c; }
+#custom-radio.c85c1dc { color: #85c1dc; }
+#custom-radio.cf57627 { color: #f57627; }
+#custom-radio.cf74105 { color: #f74105; }
+#custom-radio.cc6a0f6 { color: #c6a0f6; }
+#custom-radio.c7dc4e4 { color: #7dc4e4; }
+#custom-radio.cf0c6c6 { color: #f0c6c6; }
+#custom-radio.cb7bdf8 { color: #b7bdf8; }
+#custom-radio.ceed49f { color: #eed49f; }
+#custom-radio.cf5a97f { color: #f5a97f; }
+#custom-radio.c91d7e3 { color: #91d7e3; }
+#custom-radio.ccba6f7 { color: #cba6f7; }
+#custom-radio.cfab387 { color: #fab387; }
+#custom-radio.c94e2d5 { color: #94e2d5; }
+#custom-radio.p00 { background-image: linear-gradient(to right, currentColor 0%, transparent 0%); }
+#custom-radio.p01 { background-image: linear-gradient(to right, currentColor 1%, transparent 1%); }
+#custom-radio.p02 { background-image: linear-gradient(to right, currentColor 2%, transparent 2%); }
+#custom-radio.p03 { background-image: linear-gradient(to right, currentColor 3%, transparent 3%); }
+#custom-radio.p04 { background-image: linear-gradient(to right, currentColor 4%, transparent 4%); }
+#custom-radio.p05 { background-image: linear-gradient(to right, currentColor 5%, transparent 5%); }
+#custom-radio.p06 { background-image: linear-gradient(to right, currentColor 6%, transparent 6%); }
+#custom-radio.p07 { background-image: linear-gradient(to right, currentColor 7%, transparent 7%); }
+#custom-radio.p08 { background-image: linear-gradient(to right, currentColor 8%, transparent 8%); }
+#custom-radio.p09 { background-image: linear-gradient(to right, currentColor 9%, transparent 9%); }
+#custom-radio.p10 { background-image: linear-gradient(to right, currentColor 10%, transparent 10%); }
+#custom-radio.p11 { background-image: linear-gradient(to right, currentColor 11%, transparent 11%); }
+#custom-radio.p12 { background-image: linear-gradient(to right, currentColor 12%, transparent 12%); }
+#custom-radio.p13 { background-image: linear-gradient(to right, currentColor 13%, transparent 13%); }
+#custom-radio.p14 { background-image: linear-gradient(to right, currentColor 14%, transparent 14%); }
+#custom-radio.p15 { background-image: linear-gradient(to right, currentColor 15%, transparent 15%); }
+#custom-radio.p16 { background-image: linear-gradient(to right, currentColor 16%, transparent 16%); }
+#custom-radio.p17 { background-image: linear-gradient(to right, currentColor 17%, transparent 17%); }
+#custom-radio.p18 { background-image: linear-gradient(to right, currentColor 18%, transparent 18%); }
+#custom-radio.p19 { background-image: linear-gradient(to right, currentColor 19%, transparent 19%); }
+#custom-radio.p20 { background-image: linear-gradient(to right, currentColor 20%, transparent 20%); }
+#custom-radio.p21 { background-image: linear-gradient(to right, currentColor 21%, transparent 21%); }
+#custom-radio.p22 { background-image: linear-gradient(to right, currentColor 22%, transparent 22%); }
+#custom-radio.p23 { background-image: linear-gradient(to right, currentColor 23%, transparent 23%); }
+#custom-radio.p24 { background-image: linear-gradient(to right, currentColor 24%, transparent 24%); }
+#custom-radio.p25 { background-image: linear-gradient(to right, currentColor 25%, transparent 25%); }
+#custom-radio.p26 { background-image: linear-gradient(to right, currentColor 26%, transparent 26%); }
+#custom-radio.p27 { background-image: linear-gradient(to right, currentColor 27%, transparent 27%); }
+#custom-radio.p28 { background-image: linear-gradient(to right, currentColor 28%, transparent 28%); }
+#custom-radio.p29 { background-image: linear-gradient(to right, currentColor 29%, transparent 29%); }
+#custom-radio.p30 { background-image: linear-gradient(to right, currentColor 30%, transparent 30%); }
+#custom-radio.p31 { background-image: linear-gradient(to right, currentColor 31%, transparent 31%); }
+#custom-radio.p32 { background-image: linear-gradient(to right, currentColor 32%, transparent 32%); }
+#custom-radio.p33 { background-image: linear-gradient(to right, currentColor 33%, transparent 33%); }
+#custom-radio.p34 { background-image: linear-gradient(to right, currentColor 34%, transparent 34%); }
+#custom-radio.p35 { background-image: linear-gradient(to right, currentColor 35%, transparent 35%); }
+#custom-radio.p36 { background-image: linear-gradient(to right, currentColor 36%, transparent 36%); }
+#custom-radio.p37 { background-image: linear-gradient(to right, currentColor 37%, transparent 37%); }
+#custom-radio.p38 { background-image: linear-gradient(to right, currentColor 38%, transparent 38%); }
+#custom-radio.p39 { background-image: linear-gradient(to right, currentColor 39%, transparent 39%); }
+#custom-radio.p40 { background-image: linear-gradient(to right, currentColor 40%, transparent 40%); }
+#custom-radio.p41 { background-image: linear-gradient(to right, currentColor 41%, transparent 41%); }
+#custom-radio.p42 { background-image: linear-gradient(to right, currentColor 42%, transparent 42%); }
+#custom-radio.p43 { background-image: linear-gradient(to right, currentColor 43%, transparent 43%); }
+#custom-radio.p44 { background-image: linear-gradient(to right, currentColor 44%, transparent 44%); }
+#custom-radio.p45 { background-image: linear-gradient(to right, currentColor 45%, transparent 45%); }
+#custom-radio.p46 { background-image: linear-gradient(to right, currentColor 46%, transparent 46%); }
+#custom-radio.p47 { background-image: linear-gradient(to right, currentColor 47%, transparent 47%); }
+#custom-radio.p48 { background-image: linear-gradient(to right, currentColor 48%, transparent 48%); }
+#custom-radio.p49 { background-image: linear-gradient(to right, currentColor 49%, transparent 49%); }
+#custom-radio.p50 { background-image: linear-gradient(to right, currentColor 50%, transparent 50%); }
+#custom-radio.p51 { background-image: linear-gradient(to right, currentColor 51%, transparent 51%); }
+#custom-radio.p52 { background-image: linear-gradient(to right, currentColor 52%, transparent 52%); }
+#custom-radio.p53 { background-image: linear-gradient(to right, currentColor 53%, transparent 53%); }
+#custom-radio.p54 { background-image: linear-gradient(to right, currentColor 54%, transparent 54%); }
+#custom-radio.p55 { background-image: linear-gradient(to right, currentColor 55%, transparent 55%); }
+#custom-radio.p56 { background-image: linear-gradient(to right, currentColor 56%, transparent 56%); }
+#custom-radio.p57 { background-image: linear-gradient(to right, currentColor 57%, transparent 57%); }
+#custom-radio.p58 { background-image: linear-gradient(to right, currentColor 58%, transparent 58%); }
+#custom-radio.p59 { background-image: linear-gradient(to right, currentColor 59%, transparent 59%); }
+#custom-radio.p60 { background-image: linear-gradient(to right, currentColor 60%, transparent 60%); }
+#custom-radio.p61 { background-image: linear-gradient(to right, currentColor 61%, transparent 61%); }
+#custom-radio.p62 { background-image: linear-gradient(to right, currentColor 62%, transparent 62%); }
+#custom-radio.p63 { background-image: linear-gradient(to right, currentColor 63%, transparent 63%); }
+#custom-radio.p64 { background-image: linear-gradient(to right, currentColor 64%, transparent 64%); }
+#custom-radio.p65 { background-image: linear-gradient(to right, currentColor 65%, transparent 65%); }
+#custom-radio.p66 { background-image: linear-gradient(to right, currentColor 66%, transparent 66%); }
+#custom-radio.p67 { background-image: linear-gradient(to right, currentColor 67%, transparent 67%); }
+#custom-radio.p68 { background-image: linear-gradient(to right, currentColor 68%, transparent 68%); }
+#custom-radio.p69 { background-image: linear-gradient(to right, currentColor 69%, transparent 69%); }
+#custom-radio.p70 { background-image: linear-gradient(to right, currentColor 70%, transparent 70%); }
+#custom-radio.p71 { background-image: linear-gradient(to right, currentColor 71%, transparent 71%); }
+#custom-radio.p72 { background-image: linear-gradient(to right, currentColor 72%, transparent 72%); }
+#custom-radio.p73 { background-image: linear-gradient(to right, currentColor 73%, transparent 73%); }
+#custom-radio.p74 { background-image: linear-gradient(to right, currentColor 74%, transparent 74%); }
+#custom-radio.p75 { background-image: linear-gradient(to right, currentColor 75%, transparent 75%); }
+#custom-radio.p76 { background-image: linear-gradient(to right, currentColor 76%, transparent 76%); }
+#custom-radio.p77 { background-image: linear-gradient(to right, currentColor 77%, transparent 77%); }
+#custom-radio.p78 { background-image: linear-gradient(to right, currentColor 78%, transparent 78%); }
+#custom-radio.p79 { background-image: linear-gradient(to right, currentColor 79%, transparent 79%); }
+#custom-radio.p80 { background-image: linear-gradient(to right, currentColor 80%, transparent 80%); }
+#custom-radio.p81 { background-image: linear-gradient(to right, currentColor 81%, transparent 81%); }
+#custom-radio.p82 { background-image: linear-gradient(to right, currentColor 82%, transparent 82%); }
+#custom-radio.p83 { background-image: linear-gradient(to right, currentColor 83%, transparent 83%); }
+#custom-radio.p84 { background-image: linear-gradient(to right, currentColor 84%, transparent 84%); }
+#custom-radio.p85 { background-image: linear-gradient(to right, currentColor 85%, transparent 85%); }
+#custom-radio.p86 { background-image: linear-gradient(to right, currentColor 86%, transparent 86%); }
+#custom-radio.p87 { background-image: linear-gradient(to right, currentColor 87%, transparent 87%); }
+#custom-radio.p88 { background-image: linear-gradient(to right, currentColor 88%, transparent 88%); }
+#custom-radio.p89 { background-image: linear-gradient(to right, currentColor 89%, transparent 89%); }
+#custom-radio.p90 { background-image: linear-gradient(to right, currentColor 90%, transparent 90%); }
+#custom-radio.p91 { background-image: linear-gradient(to right, currentColor 91%, transparent 91%); }
+#custom-radio.p92 { background-image: linear-gradient(to right, currentColor 92%, transparent 92%); }
+#custom-radio.p93 { background-image: linear-gradient(to right, currentColor 93%, transparent 93%); }
+#custom-radio.p94 { background-image: linear-gradient(to right, currentColor 94%, transparent 94%); }
+#custom-radio.p95 { background-image: linear-gradient(to right, currentColor 95%, transparent 95%); }
+#custom-radio.p96 { background-image: linear-gradient(to right, currentColor 96%, transparent 96%); }
+#custom-radio.p97 { background-image: linear-gradient(to right, currentColor 97%, transparent 97%); }
+#custom-radio.p98 { background-image: linear-gradient(to right, currentColor 98%, transparent 98%); }
+#custom-radio.p99 { background-image: linear-gradient(to right, currentColor 99%, transparent 99%); }
+#custom-radio.p100 { background-image: linear-gradient(to right, currentColor 100%, transparent 100%); }

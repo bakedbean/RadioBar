@@ -25,6 +25,12 @@ everything else pauses. One script + mpv, no daemon.
     cp linux/radiobar ~/.local/bin/radiobar
     chmod +x ~/.local/bin/radiobar
 
+**Upgrading an existing install** — the style snippet is additive: if you
+appended it before the track progress line existed, append everything from
+the `/* Track progress line` comment to the end of `linux/style-snippet.css`
+to your `style.css` (replacing any earlier copy of that block), then
+restart waybar.
+
 **Waybar** — merge `linux/waybar-snippet.jsonc` into
 `~/.config/waybar/config.jsonc` (add `"custom/radio"` to a modules array —
 the end of `"modules-left"` is best, see the snippet's note — and
@@ -95,6 +101,20 @@ sources, the leading icon identifies the player
 (Spotify, Shortwave, Discord, or a generic music note) instead, with a
 `󰏤` status icon appended only when paused. A dim `󰐹` shows when
 everything's off.
+
+**Track progress line**: while a Spotify (or any MPRIS) track that reports
+its length and position is playing, a one-pixel line under the title grows from left to
+right and spans the module when the track ends. It reflects the player's
+own position, so seeking moves it within a second. Radio streams have no
+length and draw no line; neither do browser tabs or live streams that
+report none (a player with a length but no position shows an empty line at
+0%), and the line is hidden while paused. One caveat: playerctl's
+once-a-second position tick goes to a single player (the first in its
+list that prints anything, normally the one that most recently started
+playing), so with two players playing at once the shown track's line may
+only move on seeks and track changes. The line is drawn in the same colour
+as the track title, so it changes with each track like the title does; it
+sits one pixel above the bar's bottom edge.
 
 **Narrowing the title (small displays)**: the marquee window is 30
 characters by default, which occupies about 210px at a 12px monospace font
@@ -178,7 +198,24 @@ set). `radiobar stop` clears the art file and re-signals waybar so the
 thumbnail disappears.
 
 `radiobar status` also runs `playerctl --all-players --follow metadata`
-in the background to track every MPRIS player's state and metadata. On
+in the background to track every MPRIS player's state and metadata. The
+format it asks for includes `{{position}}` and `{{mpris:length}}`;
+because it contains `{{position}}`, playerctl re-emits the line once a
+second on its own timer (for one player at a time, see the caveat under
+**Track progress line**), which is the only clock behind the progress
+line (no polling, no extra processes). A line that changed only in
+position wakes the render loop but does not count as player activity for
+the arbiter's recency tie-break, does not step the marquee (scroll steps
+stay on their own 4 Hz deadline), and produces no output at all unless
+the rendered JSON actually changed. The module's JSON `class` field is
+now always an array (waybar accepts either form): the percent played
+becomes a `pNN`
+CSS class next to `playing`, a `progress` marker, and a `c<hex>` class
+carrying the title's colour; `style-snippet.css` carries one
+hard-stop-gradient rule per percent, drawn with `currentColor`, plus one
+`color` rule per palette entry — GTK3 CSS has no custom properties, so
+the width can't be computed from a single value, but `currentColor` at
+least keeps the colour out of the per-percent rules. On
 each event it recomputes which source should own the bar: radio if it's
 playing, else whichever MPRIS player is playing; if none are playing, the
 one that's paused and changed most recently; radio itself is the
